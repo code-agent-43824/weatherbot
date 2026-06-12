@@ -40,14 +40,94 @@ function userState(tgId) {
   const key = String(tgId);
   store.users[key] ||= {
     tgId: key,
-    mode: null,
     setup: null,
-    settings: null,
+    scenarios: [],
+    nextScenarioId: 1,
+    createdAt: new Date().toISOString(),
+  };
+  migrateUserState(store.users[key]);
+  return store.users[key];
+}
+
+function migrateUserState(user) {
+  if (!Array.isArray(user.scenarios)) user.scenarios = [];
+  if (!Number.isInteger(user.nextScenarioId) || user.nextScenarioId < 1) {
+    user.nextScenarioId = user.scenarios.reduce((max, scenario) => Math.max(max, Number(scenario.id) || 0), 0) + 1;
+  }
+  if (user.setup && !user.setup.settings) {
+    user.setup = {
+      mode: user.mode || 'regular',
+      step: user.setup.step,
+      settings: user.settings || {},
+    };
+  }
+  if (user.mode && user.settings && !user.scenarios.length) {
+    user.scenarios.push({
+      id: user.nextScenarioId,
+      mode: user.mode,
+      settings: user.settings,
+      stopped: Boolean(user.stopped),
+      lastSentDate: user.lastSentDate || null,
+      createdAt: user.createdAt || new Date().toISOString(),
+    });
+    user.nextScenarioId += 1;
+  }
+  delete user.mode;
+  delete user.settings;
+  delete user.stopped;
+  delete user.lastSentDate;
+}
+
+function startScenarioSetup(user, mode) {
+  user.setup = {
+    mode,
+    step: mode === 'regular' ? 'home' : 'base',
+    settings: {},
+  };
+}
+
+function finishScenarioSetup(user) {
+  const scenario = {
+    id: user.nextScenarioId,
+    mode: user.setup.mode,
+    settings: user.setup.settings,
     stopped: false,
     lastSentDate: null,
     createdAt: new Date().toISOString(),
   };
-  return store.users[key];
+  user.nextScenarioId += 1;
+  user.scenarios.push(scenario);
+  user.setup = null;
+  return scenario;
+}
+
+function activeScenarios(user) {
+  return user.scenarios.filter((scenario) => !scenario.stopped);
+}
+
+function scenarioById(user, rawId) {
+  const id = Number(rawId);
+  if (!Number.isInteger(id)) return null;
+  return user.scenarios.find((scenario) => scenario.id === id) || null;
+}
+
+function scenarioRouteLabel(scenario) {
+  if (scenario.mode === 'regular') {
+    return `${scenario.settings.home.district} -> ${scenario.settings.office.district}`;
+  }
+  return `${scenario.settings.base.city} -> ${scenario.settings.destination.city}, ${scenario.settings.tripDate}`;
+}
+
+function formatScenarioList(user) {
+  if (!user.scenarios.length) return 'Сценариев пока нет. Добавьте /regular или /planned.';
+  return [
+    'Сценарии:',
+    ...user.scenarios.map((scenario) => {
+      const mode = scenario.mode === 'regular' ? 'регулярный' : 'плановый';
+      const status = scenario.stopped ? 'остановлен' : `активен, ${scenario.settings.time}`;
+      return `${scenario.id}. ${mode}: ${scenarioRouteLabel(scenario)} — ${status}`;
+    }),
+  ].join('\n');
 }
 
 async function callTelegram(method, payload) {
@@ -406,19 +486,45 @@ function buildMotoRecommendation(windows) {
   return 'Вывод: мото выглядит нормальным вариантом, критичного дождевого риска утром, днём и вечером не видно.';
 }
 
-function templateForecast(user, date, windows, kind) {
-  const route = user.settings.home && user.settings.office
-    ? `из ${user.settings.home.district} в ${user.settings.office.district}`
-    : `из ${user.settings.base.city} в ${user.settings.destination.city}`;
+function buildTripRecommendation(windows) {
+  const riskyWindows = Object.values(windows).filter(windowHasRainRisk);
+  const rainyWindows = Object.values(windows).filter(windowHasAnyRain);
+  const severeWindows = Object.values(windows).filter((window) => window.aggregate?.severe);
+
+  if (severeWindows.length >= 2 || riskyWindows.length >= 3) {
+    return 'Вывод: погода для поездки неблагоприятная. Высокий риск сильного дождя по нескольким окнам дня, лучше перенести или ехать не на мото.';
+  }
+  if (severeWindows.length || riskyWindows.length >= 2) {
+    return 'Вывод: поездка под вопросом. Дождевики обязательны, а если прогноз подтвердится ближе к дате, лучше воздержаться от мото.';
+  }
+  if (rainyWindows.length) {
+    return 'Вывод: в целом ехать можно, но возьмите дождевики и заложите остановку под крышей на дождевое окно.';
+  }
+  return 'Вывод: погода для поездки выглядит благоприятной: по текущим источникам день скорее сухой, без заметного дождевого риска.';
+}
+
+function recommendationForScenario(scenario, windows) {
+  return scenario.mode === 'regular'
+    ? buildMotoRecommendation(windows)
+    : buildTripRecommendation(windows);
+}
+
+function templateForecast(scenario, date, windows) {
+  const route = scenario.mode === 'regular'
+    ? `из ${scenario.settings.home.district} в ${scenario.settings.office.district}`
+    : `из ${scenario.settings.base.city} в ${scenario.settings.destination.city}`;
+  const title = scenario.mode === 'regular'
+    ? `Регулярный мотопрогноз #${scenario.id} на ${date}`
+    : `Плановая поездка #${scenario.id} на ${date}`;
   return [
-    `Мотопрогноз ${kind} на ${date}`,
+    title,
     `Маршрут: ${route}`,
     '',
     formatWindow(windows.morning),
     formatWindow(windows.day),
     formatWindow(windows.evening),
     '',
-    buildMotoRecommendation(windows),
+    recommendationForScenario(scenario, windows),
   ].join('\n');
 }
 
@@ -455,7 +561,7 @@ async function aiPolish(text, facts) {
       body: JSON.stringify({
         model: openRouterModel,
         messages: [
-          { role: 'system', content: 'Ты кратко формулируешь русский мотопрогноз для Telegram обычным plain text. Запрещены Markdown, жирный текст, таблицы, кодовые кавычки, заголовки и символы **. Не выдумывай данные, опирайся только на факты и сохраняй смысл готового вывода. Важно: пользователь едет домой вечером на том же мотоцикле, поэтому при риске дождя вечером нельзя советовать утром ехать на мото; нужно рекомендовать машину или транспорт на весь день. Если дождь только днём, советуй поставить мотоцикл под крышу и не ездить в это время. Формат: 4-7 коротких строк, последняя строка начинается с "Вывод:".' },
+          { role: 'system', content: 'Ты кратко формулируешь русский мотопрогноз для Telegram обычным plain text. Запрещены Markdown, жирный текст, таблицы, кодовые кавычки, заголовки и символы **. Не выдумывай данные, опирайся только на факты и сохраняй смысл готового вывода. Для regular сценария отвечай как на вопрос: ехать ли сегодня на мото дом-офис-дом и намокнет ли пользователь, если поедет. Важно: пользователь возвращается вечером на том же мотоцикле, поэтому при риске дождя вечером нельзя советовать утром ехать на мото; нужно рекомендовать машину или транспорт на весь день. Если дождь только днём, советуй поставить мотоцикл под крышу и не ездить в это время. Для planned сценария отвечай как на вопрос: насколько благоприятна погода для выбранной даты поездки, будет ли сухо, нужны ли дождевики, или лучше воздержаться от поездки. Формат: 4-7 коротких строк, последняя строка начинается с "Вывод:".' },
           { role: 'user', content: JSON.stringify({ draft: text, facts }) },
         ],
         temperature: 0.2,
@@ -470,28 +576,29 @@ async function aiPolish(text, facts) {
   }
 }
 
-async function buildForecast(user, targetDate = null) {
-  const regular = user.mode === 'regular';
-  const from = regular ? user.settings.home : user.settings.base;
-  const to = regular ? user.settings.office : user.settings.destination;
+async function buildForecast(user, scenario, targetDate = null) {
+  const regular = scenario.mode === 'regular';
+  const from = regular ? scenario.settings.home : scenario.settings.base;
+  const to = regular ? scenario.settings.office : scenario.settings.destination;
   const points = routePoints(from, to);
   const weather = await collectWeather(points);
-  const timezone = weather.find((item) => item.source === 'Open-Meteo')?.timezone || user.settings.timezone || 'UTC';
-  user.settings.timezone = timezone;
+  const timezone = weather.find((item) => item.source === 'Open-Meteo')?.timezone || scenario.settings.timezone || 'UTC';
+  scenario.settings.timezone = timezone;
   const date = targetDate || dayOffsetDate(0, timezone);
   const windows = aggregateWindows(weather, date, timezone);
-  const recommendation = buildMotoRecommendation(windows);
-  const draft = templateForecast(user, date, windows, regular ? 'дом/офис/дом' : 'плановой поездки');
-  const polishedText = await aiPolish(draft, { date, timezone, windows, mode: user.mode, recommendation });
+  const recommendation = recommendationForScenario(scenario, windows);
+  const draft = templateForecast(scenario, date, windows);
+  const polishedText = await aiPolish(draft, { date, timezone, windows, mode: scenario.mode, recommendation });
   const finalText = enforceRecommendation(polishedText, recommendation);
 
   store.forecastLogs.push({
     tgId: user.tgId,
-    mode: user.mode,
+    scenarioId: scenario.id,
+    mode: scenario.mode,
     date,
     routeDistricts: regular
-      ? { from: user.settings.home.district, to: user.settings.office.district }
-      : { from: user.settings.base.district, to: user.settings.destination.district },
+      ? { from: scenario.settings.home.district, to: scenario.settings.office.district }
+      : { from: scenario.settings.base.district, to: scenario.settings.destination.district },
     createdAt: new Date().toISOString(),
     windows,
     message: finalText,
@@ -501,58 +608,77 @@ async function buildForecast(user, targetDate = null) {
 }
 
 async function handleCommand(chatId, user, text) {
+  const [command, arg] = text.split(/\s+/, 2);
   if (text === '/start' || text === '/help') {
     await sendMessage(chatId, [
       'Команды:',
-      '/regular — настроить ежедневный прогноз дом/офис/дом',
-      '/planned — настроить плановую поездку',
-      '/forecast — прислать прогноз сейчас',
-      '/stop — остановить регулярные отправки',
-      '/reset — сбросить настройки',
+      '/regular — добавить ежедневный прогноз дом/офис/дом',
+      '/planned — добавить плановую поездку',
+      '/scenarios — список сценариев',
+      '/forecast — прислать прогноз по всем активным сценариям',
+      '/forecast 2 — прогноз по сценарию 2',
+      '/stop — остановить отправки по всем сценариям',
+      '/stop 2 — остановить сценарий 2',
+      '/reset — удалить все сценарии и начать заново',
     ].join('\n'));
     return true;
   }
   if (text === '/regular') {
-    user.mode = 'regular';
-    user.stopped = false;
-    user.setup = { step: 'home' };
-    user.settings = {};
+    startScenarioSetup(user, 'regular');
     await saveStore();
     await sendMessage(chatId, 'Введите домашний адрес в России.');
     return true;
   }
   if (text === '/planned') {
-    user.mode = 'planned';
-    user.stopped = false;
-    user.setup = { step: 'base' };
-    user.settings = {};
+    startScenarioSetup(user, 'planned');
     await saveStore();
     await sendMessage(chatId, 'Введите базовый город или адрес отправления в России.');
     return true;
   }
-  if (text === '/stop') {
-    user.stopped = true;
+  if (text === '/scenarios') {
+    await sendMessage(chatId, formatScenarioList(user));
+    return true;
+  }
+  if (command === '/stop') {
+    if (arg) {
+      const scenario = scenarioById(user, arg);
+      if (!scenario) {
+        await sendMessage(chatId, 'Не нашёл сценарий с таким номером. Проверьте /scenarios.');
+        return true;
+      }
+      scenario.stopped = true;
+      await saveStore();
+      await sendMessage(chatId, `Остановил сценарий ${scenario.id}. Настройки сохранил.`);
+      return true;
+    }
+    for (const scenario of user.scenarios) scenario.stopped = true;
     await saveStore();
-    await sendMessage(chatId, 'Остановил регулярные отправки. Настройки сохранил.');
+    await sendMessage(chatId, 'Остановил отправки по всем сценариям. Настройки сохранил.');
     return true;
   }
   if (text === '/reset') {
-    user.mode = null;
     user.setup = null;
-    user.settings = null;
-    user.stopped = false;
-    user.lastSentDate = null;
+    user.scenarios = [];
+    user.nextScenarioId = 1;
     await saveStore();
-    await sendMessage(chatId, 'Сбросил настройки. Можно заново выбрать /regular или /planned.');
+    await sendMessage(chatId, 'Сбросил все сценарии. Можно заново добавить /regular или /planned.');
     return true;
   }
-  if (text === '/forecast') {
-    if (!user.settings || !user.mode) {
+  if (command === '/forecast') {
+    const scenarios = arg ? [scenarioById(user, arg)].filter(Boolean) : activeScenarios(user);
+    if (arg && !scenarios.length) {
+      await sendMessage(chatId, 'Не нашёл сценарий с таким номером. Проверьте /scenarios.');
+      return true;
+    }
+    if (!scenarios.length) {
       await sendMessage(chatId, 'Сначала настройте /regular или /planned.');
       return true;
     }
-    const date = user.mode === 'planned' ? user.settings.tripDate : null;
-    await sendMessage(chatId, await buildForecast(user, date));
+    if (scenarios.length > 1) await sendMessage(chatId, `Сейчас пришлю ${scenarios.length} прогноз(а) по активным сценариям.`);
+    for (const scenario of scenarios) {
+      const date = scenario.mode === 'planned' ? scenario.settings.tripDate : null;
+      await sendMessage(chatId, await buildForecast(user, scenario, date));
+    }
     return true;
   }
   return false;
@@ -561,6 +687,7 @@ async function handleCommand(chatId, user, text) {
 async function handleSetup(chatId, user, text) {
   if (!user.setup) return false;
   const step = user.setup.step;
+  const settings = user.setup.settings;
 
   if (['home', 'office', 'base', 'destination'].includes(step)) {
     const address = await geocodeRussia(text);
@@ -568,7 +695,7 @@ async function handleSetup(chatId, user, text) {
       await sendMessage(chatId, 'Не нашёл такой адрес в России. Попробуйте уточнить: город, улица, дом.');
       return true;
     }
-    user.settings[step] = address;
+    settings[step] = address;
     store.addressLogs.push({
       tgId: user.tgId,
       input: text,
@@ -614,7 +741,7 @@ async function handleSetup(chatId, user, text) {
       await sendMessage(chatId, 'Не понял дату. Введите YYYY-MM-DD или ДД.ММ.ГГГГ.');
       return true;
     }
-    user.settings.tripDate = date;
+    settings.tripDate = date;
     user.setup.step = 'destination';
     await saveStore();
     await sendMessage(chatId, 'Введите город или адрес назначения в России.');
@@ -627,14 +754,13 @@ async function handleSetup(chatId, user, text) {
       await sendMessage(chatId, 'Не понял время. Формат: 08:30.');
       return true;
     }
-    const point = user.settings.home || user.settings.base;
+    const point = settings.home || settings.base;
     const weather = await openMeteo(point);
-    user.settings.time = time;
-    user.settings.timezone = weather.timezone || 'UTC';
-    user.setup = null;
-    user.stopped = false;
+    settings.time = time;
+    settings.timezone = weather.timezone || 'UTC';
+    const scenario = finishScenarioSetup(user);
     await saveStore();
-    await sendMessage(chatId, `Готово. Буду присылать в ${time} (${user.settings.timezone}). Можно проверить командой /forecast.`);
+    await sendMessage(chatId, `Готово. Добавил сценарий ${scenario.id}; буду присылать в ${time} (${settings.timezone}). Можно проверить командой /forecast ${scenario.id} или общий /forecast.`);
     return true;
   }
 
@@ -675,18 +801,21 @@ async function pollOnce() {
 
 async function sendScheduledForecasts() {
   for (const user of Object.values(store.users)) {
-    if (!user.settings?.time || user.stopped) continue;
-    const timezone = user.settings.timezone || 'UTC';
-    const now = new Date();
-    const today = isoDateInTimezone(now, timezone);
-    if (user.lastSentDate === today || hhmmInTimezone(now, timezone) !== user.settings.time) continue;
-    try {
-      const date = user.mode === 'planned' ? user.settings.tripDate : null;
-      await sendMessage(user.tgId, await buildForecast(user, date));
-      user.lastSentDate = today;
-      await saveStore();
-    } catch (error) {
-      console.error('scheduled forecast failed:', user.tgId, error);
+    migrateUserState(user);
+    for (const scenario of activeScenarios(user)) {
+      if (!scenario.settings?.time) continue;
+      const timezone = scenario.settings.timezone || 'UTC';
+      const now = new Date();
+      const today = isoDateInTimezone(now, timezone);
+      if (scenario.lastSentDate === today || hhmmInTimezone(now, timezone) !== scenario.settings.time) continue;
+      try {
+        const date = scenario.mode === 'planned' ? scenario.settings.tripDate : null;
+        await sendMessage(user.tgId, await buildForecast(user, scenario, date));
+        scenario.lastSentDate = today;
+        await saveStore();
+      } catch (error) {
+        console.error('scheduled forecast failed:', user.tgId, scenario.id, error);
+      }
     }
   }
 }

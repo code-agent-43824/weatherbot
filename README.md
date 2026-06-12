@@ -2,10 +2,10 @@
 
 Simple Telegram bot for motorcyclist weather notes.
 
-The bot supports two modes:
+The bot supports multiple scenarios per user:
 
-- `/regular` - daily home/office/home commute forecast.
-- `/planned` - daily forecast for a planned trip date and destination.
+- `/regular` - add a daily home/office/home commute forecast.
+- `/planned` - add a daily forecast for a planned trip date and destination.
 
 It stores user settings, address logs, and forecast messages in a local JSON file.
 Addresses are stored in clear text by product decision.
@@ -18,11 +18,14 @@ BOT_TOKEN=123456:token npm start
 
 ## Commands
 
-- `/regular` - configure regular commute mode.
-- `/planned` - configure planned trip mode.
-- `/forecast` - send a forecast immediately.
-- `/stop` - stop scheduled messages while keeping settings.
-- `/reset` - delete current settings and start over.
+- `/regular` - add a regular commute scenario.
+- `/planned` - add a planned trip scenario.
+- `/scenarios` - list configured scenarios.
+- `/forecast` - send forecasts for all active scenarios immediately.
+- `/forecast 2` - send a forecast for scenario 2.
+- `/stop` - stop scheduled messages for all scenarios while keeping settings.
+- `/stop 2` - stop scheduled messages for scenario 2.
+- `/reset` - delete all scenarios and start over.
 
 ## Data Sources
 
