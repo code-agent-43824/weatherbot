@@ -352,16 +352,31 @@ function aggregateSourceSummaries(summaries) {
   const tempMax = summaries.map((s) => s.tempMax).filter(Number.isFinite);
   const rainProb = summaries.map((s) => s.rainProb).filter(Number.isFinite);
   const rainMm = summaries.map((s) => s.rainMm).filter(Number.isFinite);
-  const severeVotes = summaries.filter((s) => s.severe).length;
+  const sourceNames = new Set(summaries.map((s) => s.source));
+  const severeSources = new Set(summaries.filter((s) => s.severe).map((s) => s.source));
   return {
     tempMin: tempMin.length ? Math.min(...tempMin) : null,
     tempMax: tempMax.length ? Math.max(...tempMax) : null,
     rainProb: rainProb.length ? Math.max(...rainProb) : null,
     rainMm: rainMm.length ? Math.max(...rainMm) : null,
-    severe: severeVotes >= 1 || (rainProb.length && Math.max(...rainProb) >= 70),
-    severeVotes,
-    sourceCount: summaries.length,
+    severe: severeSources.size >= 1 || (rainProb.length && Math.max(...rainProb) >= 70),
+    severeVotes: severeSources.size,
+    sourceCount: sourceNames.size,
   };
+}
+
+function windowHasRainRisk(window) {
+  const agg = window.aggregate;
+  if (!agg) return false;
+  return Boolean(agg.severe || (agg.rainProb != null && agg.rainProb >= 50) || (agg.rainMm != null && agg.rainMm >= 1));
+}
+
+function windowHasAnyRain(window) {
+  const agg = window.aggregate;
+  if (!agg) return false;
+  return windowHasRainRisk(window)
+    || (agg.rainProb != null && agg.rainProb >= 30)
+    || (agg.rainMm != null && agg.rainMm > 0);
 }
 
 function formatWindow(window) {
@@ -372,6 +387,23 @@ function formatWindow(window) {
   const temp = agg.tempMin == null || agg.tempMax == null ? 'н/д' : `${agg.tempMin}…${agg.tempMax}°C`;
   const flag = agg.severe ? ' ⚠️ риск сильного дождя' : '';
   return `${window.label}: ${temp}, дождь до ${rain}, осадки до ${mm}, источников ${agg.sourceCount}${flag}`;
+}
+
+function buildMotoRecommendation(windows) {
+  const morningRisk = windowHasRainRisk(windows.morning);
+  const dayRisk = windowHasAnyRain(windows.day);
+  const eveningRisk = windowHasRainRisk(windows.evening);
+
+  if (morningRisk) {
+    return 'Вывод: утром лучше не ехать на мото. Есть риск попасть под дождь уже по дороге в офис.';
+  }
+  if (eveningRisk) {
+    return 'Вывод: утром на мото не рекомендую. Даже если туда сухо, вечером есть риск дождя на обратном пути, а вернуться на машине уже не получится.';
+  }
+  if (dayRisk) {
+    return 'Вывод: утром ехать на мото можно, но днём лучше поставить его под крышу и не ездить в дождевое окно.';
+  }
+  return 'Вывод: мото выглядит нормальным вариантом, критичного дождевого риска утром, днём и вечером не видно.';
 }
 
 function templateForecast(user, date, windows, kind) {
@@ -386,10 +418,27 @@ function templateForecast(user, date, windows, kind) {
     formatWindow(windows.day),
     formatWindow(windows.evening),
     '',
-    Object.values(windows).some((w) => w.aggregate?.severe)
-      ? 'Вывод: есть заметный риск дождя, утром лучше перепроверить перед выездом.'
-      : 'Вывод: критичного дождевого риска по источникам не видно.',
+    buildMotoRecommendation(windows),
   ].join('\n');
+}
+
+function sanitizeTelegramText(text) {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/^[ \t]*[-*]\s+/gm, '• ')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+}
+
+function enforceRecommendation(text, recommendation) {
+  const body = sanitizeTelegramText(text)
+    .split('\n')
+    .filter((line) => !line.trim().toLowerCase().startsWith('вывод:'))
+    .join('\n')
+    .trim();
+  return [body, recommendation].filter(Boolean).join('\n\n');
 }
 
 async function aiPolish(text, facts) {
@@ -406,7 +455,7 @@ async function aiPolish(text, facts) {
       body: JSON.stringify({
         model: openRouterModel,
         messages: [
-          { role: 'system', content: 'Ты кратко формулируешь русский мотопрогноз для Telegram. Не используй markdown-таблицы и символы-разделители таблиц. Не выдумывай данные, опирайся только на факты. Главный вопрос: ехать ли утром на мото или лучше машина/транспорт. Формат: 4-7 коротких строк, затем короткий вывод.' },
+          { role: 'system', content: 'Ты кратко формулируешь русский мотопрогноз для Telegram обычным plain text. Запрещены Markdown, жирный текст, таблицы, кодовые кавычки, заголовки и символы **. Не выдумывай данные, опирайся только на факты и сохраняй смысл готового вывода. Важно: пользователь едет домой вечером на том же мотоцикле, поэтому при риске дождя вечером нельзя советовать утром ехать на мото; нужно рекомендовать машину или транспорт на весь день. Если дождь только днём, советуй поставить мотоцикл под крышу и не ездить в это время. Формат: 4-7 коротких строк, последняя строка начинается с "Вывод:".' },
           { role: 'user', content: JSON.stringify({ draft: text, facts }) },
         ],
         temperature: 0.2,
@@ -414,7 +463,7 @@ async function aiPolish(text, facts) {
       }),
     });
     const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || text;
+    return sanitizeTelegramText(data.choices?.[0]?.message?.content || text);
   } catch (error) {
     console.error('OpenRouter failed:', error.message);
     return text;
@@ -431,8 +480,10 @@ async function buildForecast(user, targetDate = null) {
   user.settings.timezone = timezone;
   const date = targetDate || dayOffsetDate(0, timezone);
   const windows = aggregateWindows(weather, date, timezone);
+  const recommendation = buildMotoRecommendation(windows);
   const draft = templateForecast(user, date, windows, regular ? 'дом/офис/дом' : 'плановой поездки');
-  const finalText = await aiPolish(draft, { date, timezone, windows, mode: user.mode });
+  const polishedText = await aiPolish(draft, { date, timezone, windows, mode: user.mode, recommendation });
+  const finalText = enforceRecommendation(polishedText, recommendation);
 
   store.forecastLogs.push({
     tgId: user.tgId,
