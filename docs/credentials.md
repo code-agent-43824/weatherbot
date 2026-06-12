@@ -2,7 +2,7 @@
 
 WeatherBot can run with no-key fallbacks, but production-quality address and
 weather decisions need a few external credentials. The code currently supports
-DaData, OpenWeather, WeatherAPI.com, and OpenRouter environment variables.
+DaData, WeatherAPI.com, OpenWeather, and OpenRouter environment variables.
 
 ## Required For Production
 
@@ -31,7 +31,11 @@ normalized address/geopoint is needed.
 Purpose: independent precipitation probability, alerts, and more stable
 forecast coverage than no-key fallbacks.
 
-Recommended first choice: OpenWeather One Call API 3.0.
+Supported but disabled in production: OpenWeather One Call API 3.0.
+
+Do not enable this provider unless a daily billing limit is set and the billing
+country/card constraints are acceptable. WeatherBot currently keeps
+`OPENWEATHER_API_KEY` empty on production to avoid accidental overage.
 
 Actions:
 
@@ -56,6 +60,13 @@ Actions:
 ```bash
 WEATHERAPI_KEY=...
 ```
+
+Additional candidates to evaluate before adding another paid/billing-sensitive
+provider:
+
+- Visual Crossing: 1,000 free records/day according to their free-plan docs.
+- Tomorrow.io: free API plan with documented request limits.
+- Meteosource: free plan with 400 calls/day and email signup.
 
 Russian-market alternative: Yandex Weather API.
 

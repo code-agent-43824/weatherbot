@@ -387,6 +387,12 @@ function dayOffsetDate(offsetDays, timezone) {
   return isoDateInTimezone(date, timezone);
 }
 
+function daysUntil(date, timezone) {
+  const today = new Date(`${isoDateInTimezone(new Date(), timezone)}T00:00:00Z`);
+  const target = new Date(`${date}T00:00:00Z`);
+  return Math.round((target - today) / 86_400_000);
+}
+
 function parseTime(text) {
   const match = text.trim().match(/^([01]?\d|2[0-3])[:.]([0-5]\d)$/);
   if (!match) return null;
@@ -621,15 +627,48 @@ function aggregateSourceSummaries(summaries) {
   const rainMm = summaries.map((s) => s.rainMm).filter(Number.isFinite);
   const sourceNames = new Set(summaries.map((s) => s.source));
   const severeSources = new Set(summaries.filter((s) => s.severe).map((s) => s.source));
+  const rainProbSpread = rainProb.length > 1 ? Math.max(...rainProb) - Math.min(...rainProb) : 0;
+  const rainMmSpread = rainMm.length > 1 ? Math.max(...rainMm) - Math.min(...rainMm) : 0;
+  const conflict = rainProbSpread >= 40 || rainMmSpread >= 2 || (severeSources.size > 0 && severeSources.size < sourceNames.size);
+  const avg = (values) => Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+  const avgMm = (values) => Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1));
   return {
     tempMin: tempMin.length ? Math.min(...tempMin) : null,
     tempMax: tempMax.length ? Math.max(...tempMax) : null,
-    rainProb: rainProb.length ? Math.max(...rainProb) : null,
-    rainMm: rainMm.length ? Math.max(...rainMm) : null,
+    rainProb: rainProb.length ? (conflict ? Math.max(...rainProb) : avg(rainProb)) : null,
+    rainMm: rainMm.length ? (conflict ? Math.max(...rainMm) : avgMm(rainMm)) : null,
     severe: severeSources.size >= 1 || (rainProb.length && Math.max(...rainProb) >= 70),
     severeVotes: severeSources.size,
     sourceCount: sourceNames.size,
+    conflict,
+    rainProbSpread,
+    rainMmSpread,
   };
+}
+
+function providerSummaries(window) {
+  const bySource = new Map();
+  for (const summary of window.summaries) {
+    if (!bySource.has(summary.source)) bySource.set(summary.source, []);
+    bySource.get(summary.source).push(summary);
+  }
+  return [...bySource.entries()].map(([source, summaries]) => ({
+    source,
+    ...aggregateSourceSummaries(summaries),
+  })).filter((summary) => summary.rainProb != null || summary.rainMm != null || summary.tempMin != null);
+}
+
+function formatProviderSummary(summary) {
+  const temp = summary.tempMin == null || summary.tempMax == null ? 'температура н/д' : `${summary.tempMin}…${summary.tempMax}°C`;
+  const rain = summary.rainProb == null ? 'дождь н/д' : `дождь ${summary.rainProb}%`;
+  const mm = summary.rainMm == null ? 'осадки н/д' : `осадки ${summary.rainMm} мм/ч`;
+  return `${summary.source}: ${temp}, ${rain}, ${mm}`;
+}
+
+function formatProviderLines(window) {
+  const summaries = providerSummaries(window);
+  if (!summaries.length) return ['  провайдеры: данных пока нет'];
+  return summaries.map((summary) => `  • ${formatProviderSummary(summary)}`);
 }
 
 function windowHasRainRisk(window) {
@@ -646,14 +685,21 @@ function windowHasAnyRain(window) {
     || (agg.rainMm != null && agg.rainMm > 0);
 }
 
-function formatWindow(window) {
+function formatWindow(window, options = {}) {
   const agg = window.aggregate;
   if (!agg) return `${window.label}: данных пока нет`;
   const rain = agg.rainProb == null ? 'н/д' : `${agg.rainProb}%`;
   const mm = agg.rainMm == null ? 'н/д' : `${agg.rainMm} мм/ч`;
   const temp = agg.tempMin == null || agg.tempMax == null ? 'н/д' : `${agg.tempMin}…${agg.tempMax}°C`;
   const flag = agg.severe ? ' ⚠️ риск сильного дождя' : '';
-  return `${window.label}: ${temp}, дождь до ${rain}, осадки до ${mm}, источников ${agg.sourceCount}${flag}`;
+  const method = agg.conflict ? 'осторожная оценка' : 'среднее по похожим источникам';
+  const lines = [`${window.label}: ${temp}, дождь ${rain}, осадки ${mm}, источников ${agg.sourceCount}, ${method}${flag}`];
+  if (options.showProviderDetails) lines.push(...formatProviderLines(window));
+  if (options.warnConflict && agg.conflict) {
+    lines.push(`  ⚠️ источники расходятся: разброс дождя ${agg.rainProbSpread} п.п., осадков ${agg.rainMmSpread} мм/ч. Стоит перепроверить на Яндекс Погоде.`);
+    lines.push(...formatProviderLines(window));
+  }
+  return lines.join('\n');
 }
 
 function buildMotoRecommendation(windows) {
@@ -696,23 +742,33 @@ function recommendationForScenario(scenario, windows) {
     : buildTripRecommendation(windows);
 }
 
-function templateForecast(scenario, date, windows) {
+function hasWindowConflict(windows) {
+  return Object.values(windows).some((window) => window.aggregate?.conflict);
+}
+
+function templateForecast(scenario, date, windows, options = {}) {
   const route = scenario.mode === 'regular'
     ? `из ${scenario.settings.home.district} в ${scenario.settings.office.district}`
     : `из ${scenario.settings.base.city} в ${scenario.settings.destination.city}`;
   const title = scenario.mode === 'regular'
     ? `Регулярный мотопрогноз #${scenario.id} на ${date}`
     : `Плановая поездка #${scenario.id} на ${date}`;
+  const showProviderDetails = Boolean(options.showProviderDetails);
+  const warnConflict = Boolean(options.warnConflict);
+  const conflictNote = warnConflict && hasWindowConflict(windows)
+    ? 'Проверка: источники заметно расходятся, поэтому перед выездом стоит открыть Яндекс Погоду по маршруту.'
+    : null;
   return [
     title,
     `Маршрут: ${route}`,
     '',
-    formatWindow(windows.morning),
-    formatWindow(windows.day),
-    formatWindow(windows.evening),
+    formatWindow(windows.morning, { showProviderDetails, warnConflict }),
+    formatWindow(windows.day, { showProviderDetails, warnConflict }),
+    formatWindow(windows.evening, { showProviderDetails, warnConflict }),
     '',
+    conflictNote,
     recommendationForScenario(scenario, windows),
-  ].join('\n');
+  ].filter((line) => line != null).join('\n');
 }
 
 function sanitizeTelegramText(text) {
@@ -748,7 +804,7 @@ async function aiPolish(text, facts) {
       body: JSON.stringify({
         model: openRouterModel,
         messages: [
-          { role: 'system', content: 'Ты кратко формулируешь русский мотопрогноз для Telegram обычным plain text. Запрещены Markdown, жирный текст, таблицы, кодовые кавычки, заголовки и символы **. Не выдумывай данные, опирайся только на факты и сохраняй смысл готового вывода. Для regular сценария отвечай как на вопрос: ехать ли сегодня на мото дом-офис-дом и намокнет ли пользователь, если поедет. Важно: пользователь возвращается вечером на том же мотоцикле, поэтому при риске дождя вечером нельзя советовать утром ехать на мото; нужно рекомендовать машину или транспорт на весь день. Если дождь только днём, советуй поставить мотоцикл под крышу и не ездить в это время. Для planned сценария отвечай как на вопрос: насколько благоприятна погода для выбранной даты поездки, будет ли сухо, нужны ли дождевики, или лучше воздержаться от поездки. Формат: 4-7 коротких строк, последняя строка начинается с "Вывод:".' },
+          { role: 'system', content: 'Ты кратко формулируешь русский мотопрогноз для Telegram обычным plain text. Запрещены Markdown, жирный текст, таблицы, кодовые кавычки, заголовки и символы **. Не выдумывай данные, опирайся только на факты и сохраняй смысл готового вывода. Для regular сценария отвечай как на вопрос: ехать ли сегодня на мото дом-офис-дом и намокнет ли пользователь, если поедет. Важно: пользователь возвращается вечером на том же мотоцикле, поэтому при риске дождя вечером нельзя советовать утром ехать на мото; нужно рекомендовать машину или транспорт на весь день. Если дождь только днём, советуй поставить мотоцикл под крышу и не ездить в это время. Для planned сценария отвечай как на вопрос: насколько благоприятна погода для выбранной даты поездки, будет ли сухо, нужны ли дождевики, или лучше воздержаться от поездки. Если в черновике есть предупреждение о противоречии источников или отдельные строки провайдеров, сохрани этот смысл явно и не сглаживай его. Формат: 4-9 коротких строк, последняя строка начинается с "Вывод:".' },
           { role: 'user', content: JSON.stringify({ draft: text, facts }) },
         ],
         temperature: 0.2,
@@ -773,9 +829,25 @@ async function buildForecast(user, scenario, targetDate = null) {
   scenario.settings.timezone = timezone;
   const date = targetDate || dayOffsetDate(0, timezone);
   const windows = aggregateWindows(weather, date, timezone);
+  const targetDaysUntil = daysUntil(date, timezone);
+  const farPlannedTrip = scenario.mode === 'planned' && targetDaysUntil > 7;
+  const sourceConflict = hasWindowConflict(windows);
   const recommendation = recommendationForScenario(scenario, windows);
-  const draft = templateForecast(scenario, date, windows);
-  const polishedText = await aiPolish(draft, { date, timezone, windows, mode: scenario.mode, recommendation });
+  const draft = templateForecast(scenario, date, windows, {
+    showProviderDetails: farPlannedTrip,
+    warnConflict: !farPlannedTrip,
+  });
+  const polishedText = farPlannedTrip || sourceConflict
+    ? draft
+    : await aiPolish(draft, {
+      date,
+      timezone,
+      windows,
+      mode: scenario.mode,
+      recommendation,
+      farPlannedTrip,
+      targetDaysUntil,
+    });
   const finalText = enforceRecommendation(polishedText, recommendation);
 
   store.forecastLogs.push({

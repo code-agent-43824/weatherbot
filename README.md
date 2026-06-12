@@ -38,8 +38,9 @@ The bot can use production credentials when configured:
 
 - DaData for Russian address geocoding (`DADATA_API_KEY`,
   `DADATA_SECRET_KEY`).
-- OpenWeather One Call API 3.0 (`OPENWEATHER_API_KEY`).
 - WeatherAPI.com forecast API (`WEATHERAPI_KEY`).
+- OpenWeather One Call API 3.0 (`OPENWEATHER_API_KEY`) is supported by code,
+  but is disabled on production until billing risk is acceptable.
 
 The current no-key fallbacks are:
 
@@ -54,7 +55,8 @@ Optional OpenRouter polishing uses `OPENROUTER_API_KEY` and defaults to
 `openai/gpt-oss-120b:free`. If OpenRouter is unavailable, deterministic text is
 sent instead.
 
-See [docs/credentials.md](docs/credentials.md) for the credential checklist.
+See [docs/credentials.md](docs/credentials.md) for the credential checklist and
+[docs/weather-providers.md](docs/weather-providers.md) for provider notes.
 
 ## Deploy
 
