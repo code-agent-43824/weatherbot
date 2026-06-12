@@ -26,6 +26,16 @@ Additional candidates:
 - Meteosource: has a free plan with 400 calls per day and email signup. The
   code uses the documented free `/api/v1/free/point` endpoint with hourly data.
 
+Russian/Russian-language providers checked:
+
+- Gismeteo has an official API, but it requires an `X-Gismeteo-Token`; no
+  no-card self-service free key was found.
+- Meteo9 offers XML/JSON forecast export, but setup is manual and tied to a
+  specific IP address and place.
+- RP5 and Hydrometcenter/Meteoinfo do not look like clean self-service JSON
+  forecast APIs for this bot. Do not scrape private/mobile endpoints unless the
+  product decision explicitly changes.
+
 Aggregation rule:
 
 - Query all configured/available providers in parallel.
