@@ -28,7 +28,9 @@ BOT_TOKEN=123456:token npm start
 
 The current no-key MVP uses:
 
-- Nominatim for Russian geocoding with a custom User-Agent.
+- Nominatim for Russian geocoding with a custom User-Agent. The MVP tries
+  normalized Russian address variants and may fall back to a street/district
+  point when an exact house is absent from OpenStreetMap data.
 - Open-Meteo forecast API.
 - MET Norway Locationforecast API.
 - 7Timer civil forecast API.

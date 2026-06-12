@@ -82,7 +82,32 @@ async function fetchJson(url, options = {}) {
   return response.json();
 }
 
-async function geocodeRussia(query) {
+function buildNominatimQueries(query) {
+  const trimmed = query.trim().replace(/\s+/g, ' ');
+  const normalized = trimmed
+    .replace(/(^|\s)(город|г[.]?)(?=\s)/giu, ' ')
+    .replace(/(^|\s)(улица|ул[.]?)(?=\s)/giu, ' ')
+    .replace(/(^|\s)(дом|д[.]?)(?=\s)/giu, ' ')
+    .replace(/(^|\s)(корпус|корп[.]?)(?=\s)/giu, ' к ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const cityMatch = trimmed.match(/\b(?:город\s+|г[.]?\s*)?([А-ЯЁ][а-яё-]+)\b/u);
+  const streetMatch = trimmed.match(/(?:улица|ул[.]?)\s+([А-ЯЁA-Z0-9][\p{L}0-9 .-]*)/iu)
+    || trimmed.match(/([А-ЯЁA-Z0-9][\p{L}0-9 .-]+?)\s+(?:улица|ул[.]?)/iu);
+  const city = trimmed.toLowerCase().includes('москва') ? 'Москва' : cityMatch?.[1];
+  const street = streetMatch?.[1]
+    ?.replace(/\s+(?:дом|д[.]?|корпус|корп[.]?)\s+.*$/iu, '')
+    .trim();
+
+  return [...new Set([
+    trimmed,
+    normalized,
+    city && street ? `${street} улица, ${city}` : null,
+    city && street ? `${city}, ${street} улица` : null,
+  ].filter(Boolean))];
+}
+
+async function fetchNominatim(query) {
   const waitMs = 1100 - (Date.now() - lastNominatimCall);
   if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
   lastNominatimCall = Date.now();
@@ -94,11 +119,24 @@ async function geocodeRussia(query) {
     addressdetails: '1',
     limit: '1',
   });
-  const results = await fetchJson(`https://nominatim.openstreetmap.org/search?${params}`);
-  const item = results[0];
+  return fetchJson(`https://nominatim.openstreetmap.org/search?${params}`);
+}
+
+async function geocodeRussia(query) {
+  let item = null;
+  let matchedQuery = query;
+  for (const candidate of buildNominatimQueries(query)) {
+    const results = await fetchNominatim(candidate);
+    if (results[0]) {
+      item = results[0];
+      matchedQuery = candidate;
+      break;
+    }
+  }
   if (!item) return null;
 
   const address = item.address || {};
+  const exactHouse = Boolean(address.house_number);
   const district = address.city_district || address.suburb || address.borough || address.county || address.city || address.town || address.village || 'район не определён';
   return {
     input: query,
@@ -107,6 +145,8 @@ async function geocodeRussia(query) {
     lon: Number(item.lon),
     district,
     city: address.city || address.town || address.village || address.municipality || address.state || 'город не определён',
+    exactHouse,
+    matchedQuery,
     raw: item,
   };
 }
@@ -484,30 +524,35 @@ async function handleSetup(chatId, user, text) {
       label: address.label,
       district: address.district,
       city: address.city,
+      exactHouse: address.exactHouse,
+      matchedQuery: address.matchedQuery,
       createdAt: new Date().toISOString(),
     });
+    const precisionNote = address.exactHouse
+      ? ''
+      : '\n\nВажно: точный дом no-key геокодер не подтвердил, взял ближайшую улично-районную точку. Для прогноза по району этого достаточно, для строгой проверки дома позже подключим DaData.';
     if (step === 'home') {
       user.setup.step = 'office';
       await saveStore();
-      await sendMessage(chatId, `Дом: ${address.label}\nТеперь введите адрес офиса.`);
+      await sendMessage(chatId, `Дом: ${address.label}${precisionNote}\nТеперь введите адрес офиса.`);
       return true;
     }
     if (step === 'office') {
       user.setup.step = 'time';
       await saveStore();
-      await sendMessage(chatId, `Офис: ${address.label}\nВо сколько ежедневно присылать прогноз? Формат 08:30.`);
+      await sendMessage(chatId, `Офис: ${address.label}${precisionNote}\nВо сколько ежедневно присылать прогноз? Формат 08:30.`);
       return true;
     }
     if (step === 'base') {
       user.setup.step = 'tripDate';
       await saveStore();
-      await sendMessage(chatId, `База: ${address.label}\nВведите дату поездки: YYYY-MM-DD или ДД.ММ.ГГГГ.`);
+      await sendMessage(chatId, `База: ${address.label}${precisionNote}\nВведите дату поездки: YYYY-MM-DD или ДД.ММ.ГГГГ.`);
       return true;
     }
     if (step === 'destination') {
       user.setup.step = 'time';
       await saveStore();
-      await sendMessage(chatId, `Пункт назначения: ${address.label}\nВо сколько ежедневно присылать сводку по поездке? Формат 08:30.`);
+      await sendMessage(chatId, `Пункт назначения: ${address.label}${precisionNote}\nВо сколько ежедневно присылать сводку по поездке? Формат 08:30.`);
       return true;
     }
   }
