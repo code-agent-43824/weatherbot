@@ -39,8 +39,12 @@ The bot can use production credentials when configured:
 - DaData for Russian address geocoding (`DADATA_API_KEY`,
   `DADATA_SECRET_KEY`).
 - WeatherAPI.com forecast API (`WEATHERAPI_KEY`).
+- Tomorrow.io forecast API (`TOMORROW_API_KEY`).
 - OpenWeather One Call API 3.0 (`OPENWEATHER_API_KEY`) is supported by code,
   but is disabled on production until billing risk is acceptable.
+
+Weather API responses are cached in memory for up to 5 minutes. The optional
+`WEATHER_CACHE_TTL_MS` setting is capped at 300000 even if set higher.
 
 The current no-key fallbacks are:
 

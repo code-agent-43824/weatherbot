@@ -2,7 +2,8 @@
 
 WeatherBot can run with no-key fallbacks, but production-quality address and
 weather decisions need a few external credentials. The code currently supports
-DaData, WeatherAPI.com, OpenWeather, and OpenRouter environment variables.
+DaData, WeatherAPI.com, Tomorrow.io, OpenWeather, and OpenRouter environment
+variables.
 
 ## Required For Production
 
@@ -61,12 +62,28 @@ Actions:
 WEATHERAPI_KEY=...
 ```
 
+Alternative: Tomorrow.io forecast API.
+
+Actions:
+
+1. Register or sign in at https://app.tomorrow.io/.
+2. Open Development -> API Keys: https://app.tomorrow.io/development/keys.
+3. Copy the API key from that page.
+4. Put it into the server environment as:
+
+```bash
+TOMORROW_API_KEY=...
+```
+
 Additional candidates to evaluate before adding another paid/billing-sensitive
 provider:
 
 - Visual Crossing: 1,000 free records/day according to their free-plan docs.
-- Tomorrow.io: free API plan with documented request limits.
 - Meteosource: free plan with 400 calls/day and email signup.
+
+Weather provider HTTP responses may be cached in memory with
+`WEATHER_CACHE_TTL_MS`, but the application caps the value at 300000 ms
+(5 minutes) to avoid stale forecasts.
 
 Russian-market alternative: Yandex Weather API.
 

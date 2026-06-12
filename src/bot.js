@@ -11,6 +11,11 @@ const dadataApiKey = process.env.DADATA_API_KEY || '';
 const dadataSecretKey = process.env.DADATA_SECRET_KEY || '';
 const openWeatherApiKey = process.env.OPENWEATHER_API_KEY || '';
 const weatherApiKey = process.env.WEATHERAPI_KEY || '';
+const tomorrowApiKey = process.env.TOMORROW_API_KEY || '';
+const weatherCacheTtlMs = Math.min(
+  Math.max(Number(process.env.WEATHER_CACHE_TTL_MS || 300_000), 0),
+  300_000,
+);
 
 if (!token) {
   console.error('BOT_TOKEN is required');
@@ -25,6 +30,7 @@ let store = {
   addressLogs: [],
 };
 let lastNominatimCall = 0;
+const weatherCache = new Map();
 
 async function loadStore() {
   try {
@@ -208,6 +214,18 @@ async function fetchJson(url, options = {}) {
   });
   if (!response.ok) throw new Error(`${url} returned ${response.status}`);
   return response.json();
+}
+
+async function fetchCachedWeatherJson(url, options = {}) {
+  if (weatherCacheTtlMs <= 0) return fetchJson(url, options);
+
+  const now = Date.now();
+  const cached = weatherCache.get(url);
+  if (cached && now - cached.createdAt <= weatherCacheTtlMs) return cached.data;
+
+  const data = await fetchJson(url, options);
+  weatherCache.set(url, { createdAt: now, data });
+  return data;
 }
 
 function buildNominatimQueries(query) {
@@ -416,7 +434,7 @@ async function openMeteo(point) {
     forecast_days: '9',
     timezone: 'auto',
   });
-  const data = await fetchJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+  const data = await fetchCachedWeatherJson(`https://api.open-meteo.com/v1/forecast?${params}`);
   return { source: 'Open-Meteo', timezone: data.timezone || 'UTC', point, data };
 }
 
@@ -425,7 +443,7 @@ async function metNorway(point) {
     lat: String(point.lat.toFixed(4)),
     lon: String(point.lon.toFixed(4)),
   });
-  const data = await fetchJson(`https://api.met.no/weatherapi/locationforecast/2.0/compact?${params}`);
+  const data = await fetchCachedWeatherJson(`https://api.met.no/weatherapi/locationforecast/2.0/compact?${params}`);
   return { source: 'MET Norway', point, data };
 }
 
@@ -436,7 +454,7 @@ async function sevenTimer(point) {
     product: 'civil',
     output: 'json',
   });
-  const data = await fetchJson(`https://www.7timer.info/bin/api.pl?${params}`);
+  const data = await fetchCachedWeatherJson(`https://www.7timer.info/bin/api.pl?${params}`);
   return { source: '7Timer', point, data };
 }
 
@@ -450,7 +468,7 @@ async function openWeather(point) {
     lang: 'ru',
     appid: openWeatherApiKey,
   });
-  const data = await fetchJson(`https://api.openweathermap.org/data/3.0/onecall?${params}`);
+  const data = await fetchCachedWeatherJson(`https://api.openweathermap.org/data/3.0/onecall?${params}`);
   return { source: 'OpenWeather', point, data };
 }
 
@@ -464,8 +482,20 @@ async function weatherApi(point) {
     alerts: 'yes',
     lang: 'ru',
   });
-  const data = await fetchJson(`https://api.weatherapi.com/v1/forecast.json?${params}`);
+  const data = await fetchCachedWeatherJson(`https://api.weatherapi.com/v1/forecast.json?${params}`);
   return { source: 'WeatherAPI', point, data };
+}
+
+async function tomorrow(point) {
+  if (!tomorrowApiKey) return null;
+  const params = new URLSearchParams({
+    location: `${point.lat},${point.lon}`,
+    timesteps: '1h',
+    units: 'metric',
+    apikey: tomorrowApiKey,
+  });
+  const data = await fetchCachedWeatherJson(`https://api.tomorrow.io/v4/weather/forecast?${params}`);
+  return { source: 'Tomorrow.io', point, data };
 }
 
 async function collectWeather(points) {
@@ -477,6 +507,7 @@ async function collectWeather(points) {
       sevenTimer(point),
       openWeather(point),
       weatherApi(point),
+      tomorrow(point),
     ].filter(Boolean);
     const settled = await Promise.allSettled(calls);
     for (const item of settled) {
@@ -581,6 +612,28 @@ function weatherApiWindow(result, date, hours) {
   return summarizeValues(values);
 }
 
+function tomorrowWindow(result, date, hours) {
+  const values = [];
+  const hourly = result.data.timelines?.hourly || [];
+  for (const row of hourly) {
+    const time = String(row.time || '');
+    const hour = Number(time.slice(11, 13));
+    if (!time.startsWith(date) || !hours.includes(hour)) continue;
+    const data = row.values || {};
+    const rainMm = Math.max(
+      Number(data.rainIntensity || 0),
+      Number(data.precipitationIntensity || 0),
+    );
+    values.push({
+      temp: data.temperature,
+      rainProb: data.precipitationProbability,
+      rainMm,
+      code: data.weatherCode,
+    });
+  }
+  return summarizeValues(values);
+}
+
 function summarizeValues(values) {
   if (!values.length) return null;
   const temps = values.map((v) => Number(v.temp)).filter(Number.isFinite);
@@ -612,6 +665,7 @@ function aggregateWindows(weather, date, timezone) {
       if (result.source === '7Timer') summary = sevenTimerWindow(result, date, window.hours, timezone);
       if (result.source === 'OpenWeather') summary = openWeatherWindow(result, date, window.hours, timezone);
       if (result.source === 'WeatherAPI') summary = weatherApiWindow(result, date, window.hours);
+      if (result.source === 'Tomorrow.io') summary = tomorrowWindow(result, date, window.hours);
       if (summary) summaries.push({ source: result.source, ...summary });
     }
     sourceResults[key] = { label: window.label, summaries, aggregate: aggregateSourceSummaries(summaries) };
