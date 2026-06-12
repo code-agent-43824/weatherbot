@@ -12,6 +12,7 @@ const dadataSecretKey = process.env.DADATA_SECRET_KEY || '';
 const openWeatherApiKey = process.env.OPENWEATHER_API_KEY || '';
 const weatherApiKey = process.env.WEATHERAPI_KEY || '';
 const tomorrowApiKey = process.env.TOMORROW_API_KEY || '';
+const meteosourceApiKey = process.env.METEOSOURCE_API_KEY || '';
 const weatherCacheTtlMs = Math.min(
   Math.max(Number(process.env.WEATHER_CACHE_TTL_MS || 300_000), 0),
   300_000,
@@ -498,6 +499,21 @@ async function tomorrow(point) {
   return { source: 'Tomorrow.io', point, data };
 }
 
+async function meteosource(point) {
+  if (!meteosourceApiKey) return null;
+  const params = new URLSearchParams({
+    lat: String(point.lat),
+    lon: String(point.lon),
+    sections: 'hourly',
+    timezone: 'auto',
+    language: 'en',
+    units: 'metric',
+    key: meteosourceApiKey,
+  });
+  const data = await fetchCachedWeatherJson(`https://www.meteosource.com/api/v1/free/point?${params}`);
+  return { source: 'Meteosource', point, data };
+}
+
 async function collectWeather(points) {
   const results = [];
   for (const point of points) {
@@ -508,6 +524,7 @@ async function collectWeather(points) {
       openWeather(point),
       weatherApi(point),
       tomorrow(point),
+      meteosource(point),
     ].filter(Boolean);
     const settled = await Promise.allSettled(calls);
     for (const item of settled) {
@@ -634,6 +651,29 @@ function tomorrowWindow(result, date, hours) {
   return summarizeValues(values);
 }
 
+function meteosourceWindow(result, date, hours) {
+  const values = [];
+  for (const row of result.data.hourly?.data || []) {
+    const time = String(row.date || '');
+    const hour = Number(time.slice(11, 13));
+    if (!time.startsWith(date) || !hours.includes(hour)) continue;
+    const precipitation = row.precipitation || {};
+    const probability = row.probability || {};
+    const weather = String(row.weather || '');
+    const rainMm = Number(precipitation.total || 0);
+    const rainProb = probability.precipitation == null
+      ? (weather.includes('rain') || rainMm > 0 ? 50 : 15)
+      : probability.precipitation;
+    values.push({
+      temp: row.temperature,
+      rainProb,
+      rainMm,
+      code: weather || row.icon,
+    });
+  }
+  return summarizeValues(values);
+}
+
 function summarizeValues(values) {
   if (!values.length) return null;
   const temps = values.map((v) => Number(v.temp)).filter(Number.isFinite);
@@ -666,6 +706,7 @@ function aggregateWindows(weather, date, timezone) {
       if (result.source === 'OpenWeather') summary = openWeatherWindow(result, date, window.hours, timezone);
       if (result.source === 'WeatherAPI') summary = weatherApiWindow(result, date, window.hours);
       if (result.source === 'Tomorrow.io') summary = tomorrowWindow(result, date, window.hours);
+      if (result.source === 'Meteosource') summary = meteosourceWindow(result, date, window.hours);
       if (summary) summaries.push({ source: result.source, ...summary });
     }
     sourceResults[key] = { label: window.label, summaries, aggregate: aggregateSourceSummaries(summaries) };

@@ -40,6 +40,7 @@ The bot can use production credentials when configured:
   `DADATA_SECRET_KEY`).
 - WeatherAPI.com forecast API (`WEATHERAPI_KEY`).
 - Tomorrow.io forecast API (`TOMORROW_API_KEY`).
+- Meteosource forecast API (`METEOSOURCE_API_KEY`).
 - OpenWeather One Call API 3.0 (`OPENWEATHER_API_KEY`) is supported by code,
   but is disabled on production until billing risk is acceptable.
 

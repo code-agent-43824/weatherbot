@@ -8,6 +8,7 @@ Current production-safe sources:
 - WeatherAPI.com: key is configured and verified on production.
 - Tomorrow.io: supported by code, enable with `TOMORROW_API_KEY` after account
   registration.
+- Meteosource: supported by code, enable with `METEOSOURCE_API_KEY`.
 
 OpenWeather One Call 3.0 is supported by code but disabled in production:
 
@@ -22,7 +23,8 @@ Additional candidates:
 - Tomorrow.io: has an API-only free plan with documented request limits. The
   key is in the app dashboard under Development -> API Keys:
   https://app.tomorrow.io/development/keys
-- Meteosource: has a free plan with 400 calls per day and email signup.
+- Meteosource: has a free plan with 400 calls per day and email signup. The
+  code uses the documented free `/api/v1/free/point` endpoint with hourly data.
 
 Aggregation rule:
 
