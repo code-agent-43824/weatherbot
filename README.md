@@ -27,6 +27,11 @@ BOT_TOKEN=123456:token npm start
 - `/stop 2` - stop scheduled messages for scenario 2.
 - `/reset` - delete all scenarios and start over.
 
+After a scenario is created, the bot immediately sends a preliminary forecast
+and schedules the next refined forecast for the user's configured time on the
+following day. Expired planned-trip scenarios are deleted automatically with a
+notification.
+
 ## Data Sources
 
 The current no-key MVP uses:
@@ -41,6 +46,8 @@ The current no-key MVP uses:
 Optional OpenRouter polishing uses `OPENROUTER_API_KEY` and defaults to
 `openai/gpt-oss-120b:free`. If OpenRouter is unavailable, deterministic text is
 sent instead.
+
+See [docs/credentials.md](docs/credentials.md) for the credential checklist.
 
 ## Deploy
 

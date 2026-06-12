@@ -132,6 +132,35 @@ function formatScenarioList(user) {
   ].join('\n');
 }
 
+function scenarioDateIsExpired(scenario, now = new Date()) {
+  if (scenario.mode !== 'planned' || !scenario.settings?.tripDate) return false;
+  const timezone = scenario.settings.timezone || 'Europe/Moscow';
+  return scenario.settings.tripDate < isoDateInTimezone(now, timezone);
+}
+
+async function cleanupExpiredScenarios(user, notify = false) {
+  const expired = user.scenarios.filter((scenario) => scenarioDateIsExpired(scenario));
+  if (!expired.length) return [];
+
+  const expiredIds = new Set(expired.map((scenario) => scenario.id));
+  user.scenarios = user.scenarios.filter((scenario) => !expiredIds.has(scenario.id));
+  await saveStore();
+
+  if (notify) {
+    for (const scenario of expired) {
+      try {
+        await sendMessage(
+          user.tgId,
+          `Плановая поездка ${scenario.id} на ${scenario.settings.tripDate} уже прошла, я удалил этот сценарий. Если планируете следующую поездку, нажмите /planned и задайте новую дату.`,
+        );
+      } catch (error) {
+        console.error('expired notification failed:', user.tgId, scenario.id, error);
+      }
+    }
+  }
+  return expired;
+}
+
 async function callTelegram(method, payload) {
   const response = await fetch(`${apiBase}/${method}`, {
     method: 'POST',
@@ -143,11 +172,24 @@ async function callTelegram(method, payload) {
   return data.result;
 }
 
-async function sendMessage(chatId, text) {
+function mainKeyboard() {
+  return {
+    keyboard: [
+      [{ text: '/forecast' }, { text: '/scenarios' }],
+      [{ text: '/regular' }, { text: '/planned' }],
+      [{ text: '/help' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+async function sendMessage(chatId, text, options = {}) {
   await callTelegram('sendMessage', {
     chat_id: chatId,
     text,
     disable_web_page_preview: true,
+    reply_markup: options.reply_markup || mainKeyboard(),
   });
 }
 
@@ -743,6 +785,10 @@ async function handleSetup(chatId, user, text) {
       await sendMessage(chatId, 'Не понял дату. Введите YYYY-MM-DD или ДД.ММ.ГГГГ.');
       return true;
     }
+    if (date < dayOffsetDate(0, settings.timezone || 'Europe/Moscow')) {
+      await sendMessage(chatId, 'Эта дата уже прошла. Введите будущую дату поездки: YYYY-MM-DD или ДД.ММ.ГГГГ.');
+      return true;
+    }
     settings.tripDate = date;
     user.setup.step = 'destination';
     await saveStore();
@@ -762,7 +808,15 @@ async function handleSetup(chatId, user, text) {
     settings.timezone = weather.timezone || 'UTC';
     const scenario = finishScenarioSetup(user);
     await saveStore();
-    await sendMessage(chatId, `Готово. Добавил сценарий ${scenario.id}; буду присылать в ${time} (${settings.timezone}). Можно проверить командой /forecast ${scenario.id} или общий /forecast.`);
+    await sendMessage(chatId, `Готово. Добавил сценарий ${scenario.id}; буду присылать в ${time} (${settings.timezone}). Сейчас пришлю предварительный прогноз, а уточнённый прогноз будет завтра в заданное время.`);
+    try {
+      await sendMessage(chatId, await buildForecast(user, scenario, scenario.mode === 'planned' ? scenario.settings.tripDate : null));
+      scenario.lastSentDate = isoDateInTimezone(new Date(), scenario.settings.timezone || 'UTC');
+      await saveStore();
+    } catch (error) {
+      console.error('initial forecast failed:', user.tgId, scenario.id, error);
+      await sendMessage(chatId, 'Сценарий сохранён, но предварительный прогноз сейчас не собрался. Я попробую снова по расписанию.');
+    }
     return true;
   }
 
@@ -777,6 +831,7 @@ async function handleMessage(update) {
   if (!chatId || !tgId || !text) return;
 
   const user = userState(tgId);
+  await cleanupExpiredScenarios(user, true);
   if (await handleCommand(chatId, user, text)) return;
   if (await handleSetup(chatId, user, text)) return;
   await sendMessage(chatId, 'Выберите режим: /regular или /planned. Для справки: /help.');
@@ -804,6 +859,11 @@ async function pollOnce() {
 async function sendScheduledForecasts() {
   for (const user of Object.values(store.users)) {
     migrateUserState(user);
+    try {
+      await cleanupExpiredScenarios(user, true);
+    } catch (error) {
+      console.error('expired cleanup failed:', user.tgId, error);
+    }
     for (const scenario of activeScenarios(user)) {
       if (!scenario.settings?.time) continue;
       const timezone = scenario.settings.timezone || 'UTC';
@@ -822,9 +882,21 @@ async function sendScheduledForecasts() {
   }
 }
 
+async function cleanupAllExpiredScenarios() {
+  for (const user of Object.values(store.users)) {
+    migrateUserState(user);
+    try {
+      await cleanupExpiredScenarios(user, true);
+    } catch (error) {
+      console.error('startup expired cleanup failed:', user.tgId, error);
+    }
+  }
+}
+
 async function main() {
   await loadStore();
   console.log('WeatherBot started');
+  await cleanupAllExpiredScenarios();
   setInterval(() => sendScheduledForecasts().catch((error) => console.error(error)), 30_000);
   while (true) {
     try {
