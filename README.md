@@ -56,9 +56,9 @@ The current no-key fallbacks are:
 - MET Norway Locationforecast API.
 - 7Timer civil forecast API.
 
-Optional OpenRouter polishing uses `OPENROUTER_API_KEY` and defaults to
-`openai/gpt-oss-120b:free`. If OpenRouter is unavailable, deterministic text is
-sent instead.
+Forecast text is deterministic and compact. OpenRouter credentials may remain in
+the environment for future experiments, but the current forecast path does not
+use AI text polishing.
 
 See [docs/credentials.md](docs/credentials.md) for the credential checklist and
 [docs/weather-providers.md](docs/weather-providers.md) for provider notes.

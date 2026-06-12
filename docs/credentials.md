@@ -113,7 +113,9 @@ YANDEX_WEATHER_API_KEY=...
 ### OpenRouter
 
 Purpose: polish deterministic forecast facts into short Russian Telegram text.
-The bot must still keep deterministic safety recommendations outside the model.
+This is currently disabled in the forecast path because compact deterministic
+formatting is clearer for users. Keep these variables only for future
+experiments.
 
 Actions:
 
