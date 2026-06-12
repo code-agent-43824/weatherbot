@@ -34,7 +34,14 @@ notification.
 
 ## Data Sources
 
-The current no-key MVP uses:
+The bot can use production credentials when configured:
+
+- DaData for Russian address geocoding (`DADATA_API_KEY`,
+  `DADATA_SECRET_KEY`).
+- OpenWeather One Call API 3.0 (`OPENWEATHER_API_KEY`).
+- WeatherAPI.com forecast API (`WEATHERAPI_KEY`).
+
+The current no-key fallbacks are:
 
 - Nominatim for Russian geocoding with a custom User-Agent. The MVP tries
   normalized Russian address variants and may fall back to a street/district

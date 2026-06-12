@@ -7,6 +7,10 @@ const dataFile = process.env.DATA_FILE || './data/weatherbot.json';
 const userAgent = process.env.USER_AGENT || 'WeatherBot/0.2 (https://github.com/code-agent-43824/weatherbot)';
 const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
 const openRouterModel = process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free';
+const dadataApiKey = process.env.DADATA_API_KEY || '';
+const dadataSecretKey = process.env.DADATA_SECRET_KEY || '';
+const openWeatherApiKey = process.env.OPENWEATHER_API_KEY || '';
+const weatherApiKey = process.env.WEATHERAPI_KEY || '';
 
 if (!token) {
   console.error('BOT_TOKEN is required');
@@ -246,7 +250,76 @@ async function fetchNominatim(query) {
   return fetchJson(`https://nominatim.openstreetmap.org/search?${params}`);
 }
 
+function dadataAddressToPoint(input, suggestion, provider) {
+  const data = suggestion?.data || suggestion;
+  if (!data) return null;
+  const lat = Number(data.geo_lat);
+  const lon = Number(data.geo_lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const district = data.city_district_with_type
+    || data.settlement_with_type
+    || data.area_with_type
+    || data.city_with_type
+    || data.region_with_type
+    || 'район не определён';
+  const city = data.city_with_type || data.settlement_with_type || data.region_with_type || 'город не определён';
+  const exactHouse = Boolean(data.house) && (data.qc_geo == null || Number(data.qc_geo) <= 1);
+  return {
+    input,
+    label: suggestion.value || suggestion.result || input,
+    lat,
+    lon,
+    district,
+    city,
+    exactHouse,
+    matchedQuery: input,
+    provider,
+    raw: suggestion,
+  };
+}
+
+async function fetchDaData(url, payload, useSecret = false) {
+  const headers = {
+    authorization: `Token ${dadataApiKey}`,
+    'content-type': 'application/json',
+    accept: 'application/json',
+  };
+  if (useSecret) headers['x-secret'] = dadataSecretKey;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`DaData returned ${response.status}`);
+  return response.json();
+}
+
+async function geocodeDaData(query) {
+  if (!dadataApiKey) return null;
+
+  const suggested = await fetchDaData('https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address', {
+    query,
+    count: 5,
+    locations: [{ country_iso_code: 'RU' }],
+  });
+  for (const suggestion of suggested.suggestions || []) {
+    const point = dadataAddressToPoint(query, suggestion, 'DaData Suggest');
+    if (point) return point;
+  }
+
+  if (!dadataSecretKey) return null;
+  const cleaned = await fetchDaData('https://cleaner.dadata.ru/api/v1/clean/address', [query], true);
+  return dadataAddressToPoint(query, cleaned?.[0], 'DaData Clean');
+}
+
 async function geocodeRussia(query) {
+  try {
+    const dadataResult = await geocodeDaData(query);
+    if (dadataResult) return dadataResult;
+  } catch (error) {
+    console.error('DaData failed:', error.message);
+  }
+
   let item = null;
   let matchedQuery = query;
   for (const candidate of buildNominatimQueries(query)) {
@@ -271,6 +344,7 @@ async function geocodeRussia(query) {
     city: address.city || address.town || address.village || address.municipality || address.state || 'город не определён',
     exactHouse,
     matchedQuery,
+    provider: 'Nominatim',
     raw: item,
   };
 }
@@ -360,6 +434,34 @@ async function sevenTimer(point) {
   return { source: '7Timer', point, data };
 }
 
+async function openWeather(point) {
+  if (!openWeatherApiKey) return null;
+  const params = new URLSearchParams({
+    lat: String(point.lat),
+    lon: String(point.lon),
+    exclude: 'current,minutely',
+    units: 'metric',
+    lang: 'ru',
+    appid: openWeatherApiKey,
+  });
+  const data = await fetchJson(`https://api.openweathermap.org/data/3.0/onecall?${params}`);
+  return { source: 'OpenWeather', point, data };
+}
+
+async function weatherApi(point) {
+  if (!weatherApiKey) return null;
+  const params = new URLSearchParams({
+    key: weatherApiKey,
+    q: `${point.lat},${point.lon}`,
+    days: '10',
+    aqi: 'no',
+    alerts: 'yes',
+    lang: 'ru',
+  });
+  const data = await fetchJson(`https://api.weatherapi.com/v1/forecast.json?${params}`);
+  return { source: 'WeatherAPI', point, data };
+}
+
 async function collectWeather(points) {
   const results = [];
   for (const point of points) {
@@ -367,11 +469,13 @@ async function collectWeather(points) {
       openMeteo(point),
       metNorway(point),
       sevenTimer(point),
-    ];
+      openWeather(point),
+      weatherApi(point),
+    ].filter(Boolean);
     const settled = await Promise.allSettled(calls);
     for (const item of settled) {
-      if (item.status === 'fulfilled') results.push(item.value);
-      else results.push({ source: 'error', point, error: item.reason.message });
+      if (item.status === 'fulfilled' && item.value) results.push(item.value);
+      else if (item.status === 'rejected') results.push({ source: 'error', point, error: item.reason.message });
     }
   }
   return results;
@@ -434,6 +538,43 @@ function sevenTimerWindow(result, date, hours, timezone) {
   return summarizeValues(values);
 }
 
+function openWeatherWindow(result, date, hours, timezone) {
+  const values = [];
+  for (const row of result.data.hourly || []) {
+    const time = new Date(row.dt * 1000);
+    const localDate = isoDateInTimezone(time, timezone);
+    const hour = Number(hhmmInTimezone(time, timezone).slice(0, 2));
+    if (localDate !== date || !hours.includes(hour)) continue;
+    const rainMm = Number(row.rain?.['1h'] || 0);
+    const weatherCodes = (row.weather || []).map((item) => Number(item.id)).filter(Number.isFinite);
+    values.push({
+      temp: row.temp,
+      rainProb: row.pop == null ? null : Math.round(Number(row.pop) * 100),
+      rainMm,
+      code: weatherCodes.join(','),
+    });
+  }
+  return summarizeValues(values);
+}
+
+function weatherApiWindow(result, date, hours) {
+  const values = [];
+  for (const day of result.data.forecast?.forecastday || []) {
+    if (day.date !== date) continue;
+    for (const row of day.hour || []) {
+      const hour = Number(String(row.time || '').slice(11, 13));
+      if (!hours.includes(hour)) continue;
+      values.push({
+        temp: row.temp_c,
+        rainProb: row.chance_of_rain,
+        rainMm: row.precip_mm,
+        code: row.condition?.text || row.condition?.code,
+      });
+    }
+  }
+  return summarizeValues(values);
+}
+
 function summarizeValues(values) {
   if (!values.length) return null;
   const temps = values.map((v) => Number(v.temp)).filter(Number.isFinite);
@@ -463,6 +604,8 @@ function aggregateWindows(weather, date, timezone) {
       if (result.source === 'Open-Meteo') summary = openMeteoWindow(result, date, window.hours);
       if (result.source === 'MET Norway') summary = metNorwayWindow(result, date, window.hours);
       if (result.source === '7Timer') summary = sevenTimerWindow(result, date, window.hours, timezone);
+      if (result.source === 'OpenWeather') summary = openWeatherWindow(result, date, window.hours, timezone);
+      if (result.source === 'WeatherAPI') summary = weatherApiWindow(result, date, window.hours);
       if (summary) summaries.push({ source: result.source, ...summary });
     }
     sourceResults[key] = { label: window.label, summaries, aggregate: aggregateSourceSummaries(summaries) };
@@ -748,6 +891,7 @@ async function handleSetup(chatId, user, text) {
       city: address.city,
       exactHouse: address.exactHouse,
       matchedQuery: address.matchedQuery,
+      provider: address.provider,
       createdAt: new Date().toISOString(),
     });
     const precisionNote = address.exactHouse

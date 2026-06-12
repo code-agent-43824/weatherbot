@@ -1,7 +1,8 @@
 # Credential Checklist
 
 WeatherBot can run with no-key fallbacks, but production-quality address and
-weather decisions need a few external credentials.
+weather decisions need a few external credentials. The code currently supports
+DaData, OpenWeather, WeatherAPI.com, and OpenRouter environment variables.
 
 ## Required For Production
 
