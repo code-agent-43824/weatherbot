@@ -25,6 +25,8 @@ let lastNominatimCall = 0;
 async function loadStore() {
   try {
     store = JSON.parse(await readFile(dataFile, 'utf8'));
+    for (const user of Object.values(store.users || {})) migrateUserState(user);
+    await saveStore();
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     await saveStore();
