@@ -56,9 +56,8 @@ The current no-key fallbacks are:
 - MET Norway Locationforecast API.
 - 7Timer civil forecast API.
 
-Forecast text is deterministic and compact. OpenRouter credentials may remain in
-the environment for future experiments, but the current forecast path does not
-use AI text polishing.
+Forecast text is deterministic and compact. The bot does not call an LLM in the
+current runtime path.
 
 See [docs/credentials.md](docs/credentials.md) for the credential checklist and
 [docs/weather-providers.md](docs/weather-providers.md) for provider notes.

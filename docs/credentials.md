@@ -2,8 +2,8 @@
 
 WeatherBot can run with no-key fallbacks, but production-quality address and
 weather decisions need a few external credentials. The code currently supports
-DaData, WeatherAPI.com, Tomorrow.io, Meteosource, OpenWeather, and OpenRouter
-environment variables.
+DaData, WeatherAPI.com, Tomorrow.io, Meteosource, and OpenWeather environment
+variables.
 
 ## Required For Production
 
@@ -106,27 +106,6 @@ Actions:
 
 ```bash
 YANDEX_WEATHER_API_KEY=...
-```
-
-## Optional
-
-### OpenRouter
-
-Purpose: polish deterministic forecast facts into short Russian Telegram text.
-This is currently disabled in the forecast path because compact deterministic
-formatting is clearer for users. Keep these variables only for future
-experiments.
-
-Actions:
-
-1. Sign in at https://openrouter.ai/.
-2. Create an API key.
-3. Set a credit limit for the key.
-4. Put it into the server environment as:
-
-```bash
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=openai/gpt-oss-120b:free
 ```
 
 ## No Key Needed
