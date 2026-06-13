@@ -890,21 +890,32 @@ function recommendationForScenario(scenario, windows) {
     : buildTripRecommendation(windows);
 }
 
-function templateForecast(scenario, date, windows) {
-  const route = scenario.mode === 'regular'
-    ? `${scenario.settings.home.district} -> ${scenario.settings.office.district} -> ${scenario.settings.home.district}`
-    : `${scenario.settings.base.city} -> ${scenario.settings.destination.city}`;
-  const title = scenario.mode === 'regular'
-    ? `Мотопрогноз #${scenario.id} на ${date}`
-    : `Поездка #${scenario.id} на ${date}`;
+function scenarioForecastIntro(scenario, date) {
+  if (scenario.mode === 'regular') {
+    const route = `${scenario.settings.home.district} -> ${scenario.settings.office.district} -> ${scenario.settings.home.district}`;
+    return [
+      `🏍️ Сценарий #${scenario.id}: регулярный`,
+      `📍 ${route}`,
+      `📅 Дата: ${date}`,
+    ];
+  }
+
+  const route = `${scenario.settings.base.city} -> ${scenario.settings.destination.city}`;
   return [
-    title,
-    `Маршрут: ${route}`,
-    'По нескольким источникам.',
-    formatWindow(windows.morning),
-    formatWindow(windows.day),
-    formatWindow(windows.evening),
-    recommendationForScenario(scenario, windows),
+    `🏍️ Сценарий #${scenario.id}: поездка`,
+    `📍 ${route}`,
+    `📅 Дата поездки: ${scenario.settings.tripDate}`,
+  ];
+}
+
+function templateForecast(scenario, date, windows) {
+  return [
+    ...scenarioForecastIntro(scenario, date),
+    '🌦️ По нескольким источникам.',
+    `🌅 ${formatWindow(windows.morning)}`,
+    `☀️ ${formatWindow(windows.day)}`,
+    `🌆 ${formatWindow(windows.evening)}`,
+    `✅ ${recommendationForScenario(scenario, windows)}`,
   ].join('\n');
 }
 
@@ -931,8 +942,10 @@ async function polishForecastWithLlm(draft) {
               'Если строка содержит "X из Y источников", сохрани X, Y, силу дождя и фразу про большую/небольшую вероятность.',
               'Если строка содержит "сухо", не превращай её в дождь.',
               'Обязательно оставь фразу "По нескольким источникам.".',
+              'Сохрани короткую преамбулу со сценарием, маршрутом и датой.',
+              'Сохрани эмодзи в начале строк.',
               'Не рассуждай про машины и транспорт.',
-              'Формат: 5-7 коротких строк, последняя строка начинается с "Итог:".',
+              'Формат: 7-8 коротких строк, последняя строка содержит "Итог:".',
             ].join(' '),
           },
           { role: 'user', content: draft },
@@ -944,7 +957,7 @@ async function polishForecastWithLlm(draft) {
     const data = await response.json();
     const text = String(data.choices?.[0]?.message?.content || '').trim();
     const banned = /(мм|%|Open-Meteo|MET Norway|7Timer|WeatherAPI|Tomorrow|Meteosource|DaData|машин|транспорт)/i;
-    if (!text || banned.test(text) || !text.includes('По нескольким источникам') || !text.includes('Итог:')) {
+    if (!text || banned.test(text) || !text.includes('По нескольким источникам') || !text.includes('Итог:') || !/[🏍️📍📅🌦️🌅☀️🌆✅]/u.test(text)) {
       return draft;
     }
     return text;
