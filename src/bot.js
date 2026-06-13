@@ -5,6 +5,8 @@ const token = process.env.BOT_TOKEN;
 const pollTimeoutSeconds = Number(process.env.POLL_TIMEOUT_SECONDS || 30);
 const dataFile = process.env.DATA_FILE || './data/weatherbot.json';
 const userAgent = process.env.USER_AGENT || 'WeatherBot/0.2 (https://github.com/code-agent-43824/weatherbot)';
+const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
+const openRouterModel = process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free';
 const dadataApiKey = process.env.DADATA_API_KEY || '';
 const dadataSecretKey = process.env.DADATA_SECRET_KEY || '';
 const openWeatherApiKey = process.env.OPENWEATHER_API_KEY || '';
@@ -755,6 +757,13 @@ function aggregateSourceSummaries(summaries) {
     : sourceSummaries;
   const kept = filtered.length ? filtered : sourceSummaries;
 
+  const sourceRainLevel = (summary) => rainLevel(summary.rainProb, summary.rainMm);
+  const rainySources = kept.filter((summary) => sourceRainLevel(summary).rank > 0);
+  const rainLevels = rainySources.map(sourceRainLevel);
+  const maxRainRank = rainLevels.length ? Math.max(...rainLevels.map((level) => level.rank)) : 0;
+  const minRainRank = rainLevels.length ? Math.min(...rainLevels.map((level) => level.rank)) : 0;
+  const levelLabel = (rank) => ['сухо', 'лёгкий дождь', 'дождь', 'ливень', 'ураганный ливень'][rank] || 'дождь';
+
   const tempMin = kept.map((s) => s.tempMin).filter(Number.isFinite);
   const tempMax = kept.map((s) => s.tempMax).filter(Number.isFinite);
   const rainProb = kept.map((s) => s.rainProb).filter(Number.isFinite);
@@ -776,6 +785,10 @@ function aggregateSourceSummaries(summaries) {
     severe: severeSources.size >= 1 || (rainProb.length && Math.max(...rainProb) >= 70) || (rainMm.length && Math.max(...rainMm) >= 2),
     severeVotes: severeSources.size,
     sourceCount: kept.length,
+    rainySourceCount: rainySources.length,
+    rainMajority: rainySources.length > kept.length / 2,
+    rainMinLabel: levelLabel(minRainRank),
+    rainMaxLabel: levelLabel(maxRainRank),
     originalSourceCount: sourceSummaries.length,
     excludedOutliers: sourceSummaries.length - kept.length,
     conflict: rainProbSpread >= 35 || rainMmSpread >= 2,
@@ -787,15 +800,13 @@ function aggregateSourceSummaries(summaries) {
 function windowHasRainRisk(window) {
   const agg = window.aggregate;
   if (!agg) return false;
-  return Boolean(agg.severe || (agg.rainProb != null && agg.rainProb >= 50) || (agg.rainMm != null && agg.rainMm >= 1));
+  return Boolean(agg.rainMajority);
 }
 
 function windowHasAnyRain(window) {
   const agg = window.aggregate;
   if (!agg) return false;
-  return windowHasRainRisk(window)
-    || (agg.rainProb != null && agg.rainProb >= 30)
-    || (agg.rainMm != null && agg.rainMm > 0);
+  return Boolean(agg.rainySourceCount > 0);
 }
 
 function rainLevel(prob, mm) {
@@ -805,7 +816,7 @@ function rainLevel(prob, mm) {
   if (rainProb < 50 && rainMm <= 0.8) return { rank: 1, label: 'лёгкий дождь' };
   if (rainProb < 70 && rainMm <= 2) return { rank: 2, label: 'дождь' };
   if (rainProb < 85 && rainMm <= 6) return { rank: 3, label: 'ливень' };
-  return { rank: 4, label: 'очень сильный ливень' };
+  return { rank: 4, label: 'ураганный ливень' };
 }
 
 function formatTempRange(agg) {
@@ -817,12 +828,19 @@ function formatTempRange(agg) {
 }
 
 function formatRainWords(agg) {
-  if (agg.rainProb == null && agg.rainMm == null) return 'осадки н/д';
-  const main = rainLevel(agg.rainProb, agg.rainMm);
-  const low = rainLevel(agg.rainProbMin ?? agg.rainProb, agg.rainMmMin ?? agg.rainMm);
-  const high = rainLevel(agg.rainProbMax ?? agg.rainProb, agg.rainMmMax ?? agg.rainMm);
-  if (high.rank - low.rank >= 2) return `${low.label}…${high.label}`;
-  return main.label;
+  if (!agg.sourceCount) return 'осадки н/д';
+  if (!agg.rainySourceCount) return 'сухо';
+  const genitive = {
+    'лёгкий дождь': 'лёгкого дождя',
+    'дождь': 'дождя',
+    'ливень': 'ливня',
+    'ураганный ливень': 'ураганного ливня',
+  };
+  const strength = agg.rainMinLabel === agg.rainMaxLabel
+    ? agg.rainMaxLabel
+    : `от ${genitive[agg.rainMinLabel] || agg.rainMinLabel} до ${genitive[agg.rainMaxLabel] || agg.rainMaxLabel}`;
+  const probability = agg.rainMajority ? 'Вероятность дождя большая.' : 'Вероятность дождя небольшая.';
+  return `${agg.rainySourceCount} из ${agg.sourceCount} источников обещают дождь: ${strength}. ${probability}`;
 }
 
 function formatWindow(window) {
@@ -890,6 +908,52 @@ function templateForecast(scenario, date, windows) {
   ].join('\n');
 }
 
+async function polishForecastWithLlm(draft) {
+  if (!openRouterApiKey) return draft;
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${openRouterApiKey}`,
+        'content-type': 'application/json',
+        'http-referer': 'https://github.com/code-agent-43824/weatherbot',
+        'x-title': 'WeatherBot',
+      },
+      body: JSON.stringify({
+        model: openRouterModel,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Ты редактор короткого Telegram-прогноза для мотоциклиста.',
+              'Используй только готовый черновик; не добавляй погодные факты, числа, проценты, миллиметры или названия провайдеров.',
+              'Обязательно сохрани смысл каждой строки по окнам дня.',
+              'Если строка содержит "X из Y источников", сохрани X, Y, силу дождя и фразу про большую/небольшую вероятность.',
+              'Если строка содержит "сухо", не превращай её в дождь.',
+              'Обязательно оставь фразу "По нескольким источникам.".',
+              'Не рассуждай про машины и транспорт.',
+              'Формат: 5-7 коротких строк, последняя строка начинается с "Итог:".',
+            ].join(' '),
+          },
+          { role: 'user', content: draft },
+        ],
+        temperature: 0.1,
+        max_tokens: 350,
+      }),
+    });
+    const data = await response.json();
+    const text = String(data.choices?.[0]?.message?.content || '').trim();
+    const banned = /(мм|%|Open-Meteo|MET Norway|7Timer|WeatherAPI|Tomorrow|Meteosource|DaData|машин|транспорт)/i;
+    if (!text || banned.test(text) || !text.includes('По нескольким источникам') || !text.includes('Итог:')) {
+      return draft;
+    }
+    return text;
+  } catch (error) {
+    console.error('OpenRouter failed:', error.message);
+    return draft;
+  }
+}
+
 async function buildForecast(user, scenario, targetDate = null) {
   const regular = scenario.mode === 'regular';
   const from = regular ? scenario.settings.home : scenario.settings.base;
@@ -900,7 +964,8 @@ async function buildForecast(user, scenario, targetDate = null) {
   scenario.settings.timezone = timezone;
   const date = targetDate || dayOffsetDate(0, timezone);
   const windows = aggregateWindows(weather, date, timezone);
-  const finalText = templateForecast(scenario, date, windows);
+  const draftText = templateForecast(scenario, date, windows);
+  const finalText = await polishForecastWithLlm(draftText);
 
   store.forecastLogs.push({
     tgId: user.tgId,

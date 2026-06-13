@@ -56,8 +56,10 @@ The current no-key fallbacks are:
 - MET Norway Locationforecast API.
 - 7Timer civil forecast API.
 
-Forecast text is deterministic and compact. The bot does not call an LLM in the
-current runtime path.
+Forecast facts and safety decisions are deterministic. If `OPENROUTER_API_KEY`
+is configured, an LLM may lightly edit the final Telegram text under a strict
+prompt; invalid or overbroad edits are discarded and the deterministic draft is
+sent instead.
 
 See [docs/credentials.md](docs/credentials.md) for the credential checklist and
 [docs/weather-providers.md](docs/weather-providers.md) for provider notes.
