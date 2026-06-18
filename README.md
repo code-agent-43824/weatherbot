@@ -18,6 +18,8 @@ BOT_TOKEN=123456:token npm start
 
 ## Commands
 
+- `/intro` - explain how the bot works and how to configure it. The same
+  introduction is shown automatically on a user's first private interaction.
 - `/regular` - add a regular commute scenario.
 - `/planned` - add a planned trip scenario.
 - `/scenarios` - list configured scenarios.

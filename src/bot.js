@@ -56,6 +56,7 @@ function userState(tgId) {
     setup: null,
     scenarios: [],
     nextScenarioId: 1,
+    introShownAt: null,
     createdAt: new Date().toISOString(),
   };
   migrateUserState(store.users[key]);
@@ -64,6 +65,10 @@ function userState(tgId) {
 
 function migrateUserState(user) {
   if (!Array.isArray(user.scenarios)) user.scenarios = [];
+  if (!Object.hasOwn(user, 'introShownAt')) {
+    // Existing users should not receive an unsolicited intro after an update.
+    user.introShownAt = user.createdAt || new Date().toISOString();
+  }
   if (!Number.isInteger(user.nextScenarioId) || user.nextScenarioId < 1) {
     user.nextScenarioId = user.scenarios.reduce((max, scenario) => Math.max(max, Number(scenario.id) || 0), 0) + 1;
   }
@@ -143,6 +148,34 @@ function formatScenarioList(user) {
   ].join('\n');
 }
 
+function introText() {
+  return [
+    '🏍️ WeatherBot помогает понять, стоит ли ехать на мотоцикле и не попадёте ли вы под дождь.',
+    '',
+    'Как это работает:',
+    '• бот проверяет маршрут сразу по нескольким погодным источникам;',
+    '• сравнивает утро, день и вечер;',
+    '• присылает короткий вывод о дождевом риске и пригодности погоды для поездки.',
+    '',
+    'Есть два вида сценариев:',
+    '🏠 Регулярный — ежедневный маршрут дом → офис → дом. Бот учитывает, что возвращаться нужно на том же мотоцикле.',
+    '🗺️ Поездка — прогноз для выбранной даты и маршрута в одну сторону.',
+    '',
+    'Как начать:',
+    '1. Нажмите Регулярный или Поездка.',
+    '2. Введите адреса, дату (для поездки) и время отправки.',
+    '3. После настройки бот сразу пришлёт первый прогноз, а затем будет писать по расписанию.',
+    '',
+    'Полезные команды:',
+    '/forecast — получить прогноз сейчас',
+    '/scenarios — показать все сценарии',
+    '/stop 2 — остановить сценарий №2',
+    '/reset — удалить все сценарии',
+    '/help — краткая справка',
+    '/intro — снова показать это описание',
+  ].join('\n');
+}
+
 function scenarioDateIsExpired(scenario, now = new Date()) {
   if (scenario.mode !== 'planned' || !scenario.settings?.tripDate) return false;
   const timezone = scenario.settings.timezone || 'Europe/Moscow';
@@ -181,6 +214,21 @@ async function callTelegram(method, payload) {
   const data = await response.json();
   if (!data.ok) throw new Error(`${method} failed: ${data.description || response.statusText}`);
   return data.result;
+}
+
+async function registerBotCommands() {
+  await callTelegram('setMyCommands', {
+    commands: [
+      { command: 'intro', description: 'Как работает бот' },
+      { command: 'regular', description: 'Добавить регулярный маршрут' },
+      { command: 'planned', description: 'Добавить плановую поездку' },
+      { command: 'scenarios', description: 'Показать сценарии' },
+      { command: 'forecast', description: 'Получить прогноз сейчас' },
+      { command: 'stop', description: 'Остановить отправки' },
+      { command: 'reset', description: 'Удалить все сценарии' },
+      { command: 'help', description: 'Краткая справка' },
+    ],
+  });
 }
 
 function mainKeyboard() {
@@ -1007,9 +1055,22 @@ async function handleCommand(chatId, user, text) {
   };
   text = buttonCommands[text] || text;
   const [command, arg] = text.split(/\s+/, 2);
-  if (text === '/start' || text === '/help') {
+  if (text === '/intro') {
+    user.introShownAt = new Date().toISOString();
+    await saveStore();
+    await sendMessage(chatId, introText());
+    return true;
+  }
+  if (text === '/start') {
+    user.introShownAt = new Date().toISOString();
+    await saveStore();
+    await sendMessage(chatId, introText());
+    return true;
+  }
+  if (text === '/help') {
     await sendMessage(chatId, [
       'Команды:',
+      '/intro — как работает бот и как им пользоваться',
       'Регулярный — добавить прогноз дом/офис/дом',
       'Поездка — добавить плановую поездку',
       'Сценарии — список сценариев',
@@ -1184,12 +1245,18 @@ async function handleSetup(chatId, user, text) {
 async function handleMessage(update) {
   const message = update.message;
   const chatId = message?.chat?.id;
+  const chatType = message?.chat?.type;
   const tgId = message?.from?.id;
   const text = message?.text?.trim();
   if (!chatId || !tgId || !text) return;
 
   const user = userState(tgId);
   await cleanupExpiredScenarios(user, true);
+  if (chatType === 'private' && !user.introShownAt && text !== '/intro' && text !== '/start') {
+    user.introShownAt = new Date().toISOString();
+    await saveStore();
+    await sendMessage(chatId, introText());
+  }
   if (await handleCommand(chatId, user, text)) return;
   if (await handleSetup(chatId, user, text)) return;
   await sendMessage(chatId, 'Выберите режим: Регулярный или Поездка. Для справки: Помощь.');
@@ -1254,6 +1321,11 @@ async function cleanupAllExpiredScenarios() {
 async function main() {
   await loadStore();
   console.log('WeatherBot started');
+  try {
+    await registerBotCommands();
+  } catch (error) {
+    console.error('command registration failed:', error);
+  }
   await cleanupAllExpiredScenarios();
   setInterval(() => sendScheduledForecasts().catch((error) => console.error(error)), 30_000);
   while (true) {
