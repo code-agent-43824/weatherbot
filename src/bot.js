@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { createNonOverlappingRunner } from './non-overlapping-runner.js';
 
 const token = process.env.BOT_TOKEN;
 const pollTimeoutSeconds = Number(process.env.POLL_TIMEOUT_SECONDS || 30);
@@ -1307,6 +1308,8 @@ async function sendScheduledForecasts() {
   }
 }
 
+const runScheduledForecasts = createNonOverlappingRunner(sendScheduledForecasts);
+
 async function cleanupAllExpiredScenarios() {
   for (const user of Object.values(store.users)) {
     migrateUserState(user);
@@ -1327,7 +1330,7 @@ async function main() {
     console.error('command registration failed:', error);
   }
   await cleanupAllExpiredScenarios();
-  setInterval(() => sendScheduledForecasts().catch((error) => console.error(error)), 30_000);
+  setInterval(() => runScheduledForecasts().catch((error) => console.error(error)), 30_000);
   while (true) {
     try {
       await pollOnce();

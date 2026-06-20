@@ -5,10 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node src/bot.js",
-    "check": "node --check src/bot.js"
+    "check": "node --check src/bot.js && node --test"
   },
   "engines": {
     "node": ">=18"
   }
 }
-
