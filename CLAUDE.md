@@ -148,12 +148,22 @@ version means deciding whether those two strings move with it.
 
 ## Deployment
 
-`README.md` records that the service runs on the Oracle server and is deployed from `main`.
-The repository contains no CI workflow, so whether a push to `main` reaches production by
-itself, who may deploy, and what to verify afterwards (§6) are not established here — ask the
-owner before deploying rather than inferring it.
+**Deployment needs manual work on the server, so only Watson deploys** (§6). Every other agent
+stays out of production — no server access, no restarts, no deploy jobs.
 
-## Open questions for the owner
+A push to `main` is therefore not a release: the trunk running ahead of the server is the normal
+state, and nothing reaches users until someone deploys by hand. The service runs on the Oracle
+server from `main` (`README.md`), with runtime secrets in the systemd environment file. The exact
+commands are not written down anywhere in the repository — whoever deploys next records them in
+this section.
 
-- Deployment ownership and the post-deploy check (§6), per above.
-- What the owner reviews by hand, and where a pause is expected (§13) — not recorded yet.
+## Owner review
+
+The owner checks two things by hand, both of them out of reach of any test here:
+
+- **The bot's message in Telegram** — after a change to the wording, the format, or the logic
+  behind the verdict. He runs `/forecast` and reads what comes back.
+- **Production after a deploy** — that the service is alive and forecasts are going out.
+
+So an agent **pauses after each closed stage and waits for that check** before opening the next
+one (§13). Close the stage in the documents, say plainly what to look at, and stop.
