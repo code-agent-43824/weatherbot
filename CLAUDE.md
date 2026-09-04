@@ -1,21 +1,28 @@
+@AGENTS.md
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The first line is an import: it pulls the owner's canonical rules into context at session start.
+Nothing from `AGENTS.md` is restated below — this file holds only what is specific to WeatherBot:
+commands, the map of the code, settled decisions, and departures.
+
 ## Commands
 
 ```bash
-npm start                      # run the bot (BOT_TOKEN is required, process exits without it)
+npm start                      # run the bot (BOT_TOKEN is required, the process exits without it)
 npm run check                  # syntax check src/bot.js + run the whole test suite
 node --test test/non-overlapping-runner.test.js   # run one test file
 node --test --test-name-pattern 'unlocks after'   # run one test by name
 ```
 
-There is no build step, no linter, and no dependency install: `package.json` has zero
-dependencies and `node_modules/` never exists here. Everything runs on Node >= 18 built-ins
-(global `fetch`, `node:test`, `node:fs/promises`, `Intl`).
+`npm run check` is the full gate: there is no linter, no formatter and no build step, and there
+is nothing to install — `package.json` declares zero dependencies, so `node_modules/` never
+exists here. Everything runs on Node >= 18 built-ins: global `fetch`, `node:test`,
+`node:fs/promises`, `Intl`. Adding a dependency is a stack change (§9).
 
-## Architecture
+## Map of the code
 
 A single long-polling Telegram bot process. `main()` in `src/bot.js` loads the JSON store,
 registers the bot command list, deletes expired scenarios, starts a 30-second scheduler
@@ -24,85 +31,123 @@ after 3s — the process is meant to stay alive.
 
 **Two concurrent drivers, one shared store.**
 
-1. *Interactive*: `pollOnce` → `handleMessage` → `handleCommand` (slash commands and the
+1. *Interactive*: `pollOnce` → `handleMessage` → `handleCommand` (slash commands plus the
    Russian reply-keyboard labels mapped in `buttonCommands`) → falling through to
-   `handleSetup` (the address/date/time wizard driven by `user.setup.step`).
-2. *Scheduled*: `setInterval` → `runScheduledForecasts` → `sendScheduledForecasts`, which
-   walks every user's active scenarios and sends when `hhmmInTimezone(now, tz) ===
+   `handleSetup`, the address/date/time wizard driven by `user.setup.step`.
+2. *Scheduled*: `setInterval` → `runScheduledForecasts` → `sendScheduledForecasts`, which walks
+   every user's active scenarios and sends when `hhmmInTimezone(now, tz) ===
    scenario.settings.time`. The interval fires more often than once a minute, so
    `scenario.lastSentDate` is the dedupe guard, and `createNonOverlappingRunner`
-   (`src/non-overlapping-runner.js`) drops a tick if the previous one is still awaiting
-   network calls. Keep both guards intact when touching the scheduler.
+   (`src/non-overlapping-runner.js`) drops a tick while the previous one is still awaiting
+   network calls. Both guards are load-bearing; changing the interval or the send condition
+   without them reintroduces duplicate messages.
 
-**Data model.** `store = { users, forecastLogs, addressLogs }` persisted as one pretty-printed
+**Data model.** `store = { users, forecastLogs, addressLogs }`, persisted as one pretty-printed
 JSON file (`DATA_FILE`, default `./data/weatherbot.json`). A user owns N `scenarios`, each
 `{ id, mode: 'regular' | 'planned', settings, stopped, lastSentDate, createdAt }`. `regular`
 scenarios carry `home`/`office` points; `planned` ones carry `base`/`destination`/`tripDate`.
 
-- `saveStore()` rewrites the whole file. Every mutation must be followed by an `await
-  saveStore()` before the confirming `sendMessage` — there is no transaction or dirty flag.
-- `migrateUserState(user)` is the only schema-migration point. It runs on load, in
+- `saveStore()` rewrites the whole file. Every mutation needs an `await saveStore()` before the
+  confirming `sendMessage` — there is no transaction, no dirty flag and no periodic flush.
+- `migrateUserState(user)` is the only schema-migration point. It runs on load, inside
   `userState()`, and at the top of each scheduler pass. Older single-scenario users are folded
-  into `scenarios[]` there, so add new fields with a default in that function rather than
-  assuming they exist.
+  into `scenarios[]` there, so a new field gets its default in that function rather than being
+  assumed present. The store on the server predates several of these fields.
 
 **Forecast pipeline** (`buildForecast`): `routePoints(from, to)` makes three points (origin,
 midpoint, destination) → `collectWeather` queries every configured provider for every point via
-`Promise.allSettled` (a rejected provider becomes `{ source: 'error' }` and is skipped, never
-fatal) → `aggregateWindows` slices morning/day/evening hour windows → `aggregateSourceSummaries`
-collapses per-source summaries, drops outliers by a median risk score, and derives the
+`Promise.allSettled`, so a failing provider becomes `{ source: 'error' }` and is skipped, never
+fatal → `aggregateWindows` slices morning/day/evening hour windows → `aggregateSourceSummaries`
+collapses per-source summaries, drops outliers by a median risk score and derives the
 rain-consensus fields (`rainySourceCount`, `rainMajority`, `severeVotes`, `conflict`) →
 `templateForecast` renders the Russian message → `polishForecastWithLlm` optionally rewords it →
-the result is appended to `store.forecastLogs`.
+the whole `windows` object and the final text are appended to `store.forecastLogs`.
+
+Not every field the aggregate computes reaches the message; the aggregate is also the log
+record. Check `formatWindow`/`templateForecast` for what a user actually sees.
 
 ### Adding a weather provider
 
-Three coordinated edits, all in `src/bot.js`:
+Three coordinated edits, all in `src/bot.js`, tied together by the source string:
 
 1. A fetch function returning `{ source: '<Name>', point, data }`, or `null` when its API key is
-   unset — `collectWeather` filters nulls, that is how optional providers stay optional. Always
-   go through `fetchCachedWeatherJson`.
+   unset — `collectWeather` filters nulls, and that is how optional providers stay optional.
+   Always go through `fetchCachedWeatherJson`, never bare `fetch`.
 2. A `<name>Window(result, date, hours[, timezone])` parser that pushes
-   `{ temp, rainProb, rainMm, code }` rows and returns `summarizeValues(values)`. Providers
-   without a real probability field synthesize one (see `metNorwayWindow`: ~55 when the symbol
-   says rain, ~15 otherwise) — keep such heuristics conservative.
-3. Register the call in `collectWeather` and the `result.source === '<Name>'` branch in
-   `aggregateWindows`. The source string ties all three together.
+   `{ temp, rainProb, rainMm, code }` rows and returns `summarizeValues(values)`. A provider
+   with no real probability field synthesizes one (see `metNorwayWindow`: ~55 when the symbol
+   says rain, ~15 otherwise) — such a heuristic stays conservative, it feeds a safety verdict.
+3. Register the call in `collectWeather` and add the `result.source === '<Name>'` branch in
+   `aggregateWindows`.
 
-## Rules that are load-bearing here
+Provider evaluation notes — free-plan limits, what was rejected and why — live in
+`docs/weather-providers.md`; the credential setup steps live in `docs/credentials.md`.
 
-- **Weather facts and safety verdicts are deterministic.** The LLM step is text polish only:
-  `polishForecastWithLlm` sends the finished draft, then rejects the reply if it mentions
-  numbers/units/provider names, or drops `"По нескольким источникам"`, `"Итог:"`, or the leading
-  emoji — falling back to the deterministic draft. Never let the model produce a fact, a
-  probability, or a recommendation, and keep the validator in sync with any template change.
-- **Respect third-party rate limits and quotas.** Nominatim calls are serialized at 1.1s apart
-  via `lastNominatimCall` and always carry the `USER_AGENT`; weather responses are cached in
-  memory by URL with `WEATHER_CACHE_TTL_MS` hard-capped at 300000 ms so manual `/forecast` spam
-  cannot burn provider quotas or serve stale data. Do not raise the cap or remove the throttle.
-- **Geocoding is Russia-only, DaData first, Nominatim as fallback.** `geocodeRussia` swallows
-  DaData failures and falls through to `buildNominatimQueries`, which tries progressively
-  normalized Russian address variants. A street-level hit is acceptable — `exactHouse: false`
-  only adds a note to the user, it is not an error.
-- **OpenWeather stays disabled in production** (`OPENWEATHER_API_KEY` empty) because of billing
-  overage risk; the code path exists but must not be enabled without a daily billing limit. See
-  `docs/credentials.md` and `docs/weather-providers.md` before adding or enabling a provider.
-- **Addresses are stored in clear text by product decision**; secrets come from the environment
-  only (systemd environment file on the server, never the repo).
-- **Language split**: every user-facing string, keyboard label, and command description is
-  Russian; code, comments, docs, and commit messages are English. Commits follow Conventional
-  Commits (`feat:`, `fix:`, `chore:`, `docs:`) with a single short subject line.
-- **Style**: ES modules, 2-space indent, single quotes, semicolons, trailing commas in
-  multi-line literals, `async`/`await` (no `.then` chains), early returns over nesting, small
-  pure helpers for formatting/aggregation. Background failures are caught and logged with a
-  short lowercase prefix (`console.error('scheduled forecast failed:', ...)`) and never crash
-  the loop; user-visible failures answer with a Russian apology message instead.
-- **Testing**: only genuinely pure/extractable logic gets its own module plus a `node:test` file
-  under `test/` (the non-overlapping runner is the current example). `src/bot.js` exports
-  nothing and is covered by `node --check` only, so prefer extracting a helper over adding
-  untestable branches to it.
+## Project conventions
 
-## Deploy
+- **UI strings are Russian** (§10): every user-facing message, keyboard label and command
+  description. Code, comments and the documents under `docs/` that describe providers and
+  credentials are currently English.
+- ES modules, 2-space indent, single quotes, semicolons, trailing commas in multi-line literals,
+  `async`/`await` over `.then` chains, early returns over nesting, small pure helpers for
+  formatting and aggregation.
+- Background failures are caught, logged with a short lowercase prefix
+  (`console.error('scheduled forecast failed:', ...)`) and never crash the loop; a failure the
+  user is waiting on answers with a Russian apology message instead.
+- `src/bot.js` exports nothing and is covered by `node --check` alone. Logic worth testing is
+  extracted into its own module with a `node:test` file under `test/` —
+  `src/non-overlapping-runner.js` is the pattern to follow.
+- Every environment variable the process reads is listed in `.env.example`; runtime values live
+  in the systemd environment file on the server.
 
-`main` is deployed to the Oracle server; runtime secrets live in the systemd environment file
-outside the repository. `.env.example` documents every variable the process reads.
+## Settled decisions
+
+Deliberate, with reasons; not to be reopened on an agent's initiative (§8).
+
+- **Weather facts and safety verdicts are deterministic; the LLM only polishes wording.**
+  `polishForecastWithLlm` sends the finished draft and rejects the reply if it mentions numbers,
+  units or provider names, or if it drops `"По нескольким источникам"`, `"Итог:"` or the leading
+  emoji — the deterministic draft is sent instead. Reason: a model must never be the source of a
+  probability or a ride/don't-ride recommendation. Any change to `templateForecast` keeps that
+  validator in sync.
+- **OpenWeather One Call 3.0 is supported by code but not to be enabled without a daily billing
+  limit.** Reason: billing overage risk is not acceptable for this project
+  (`docs/credentials.md`, `docs/weather-providers.md`).
+- **Weather responses are cached in memory by URL, and `WEATHER_CACHE_TTL_MS` is capped at
+  300000 ms in code.** Reason: repeated manual `/forecast` calls must not burn provider quotas,
+  and a longer cache would serve stale forecasts. Do not raise the cap.
+- **Nominatim is an MVP fallback only, serialized to one call per 1.1s via `lastNominatimCall`
+  and always sent with `USER_AGENT`.** Reason: its usage policy. DaData is the primary geocoder;
+  `geocodeRussia` swallows DaData failures and falls through to the normalized query variants
+  built by `buildNominatimQueries`. A street-level hit is acceptable — `exactHouse: false` only
+  adds a note for the user, it is not an error.
+- **Geocoding is Russia-only** (`countrycodes=ru`, `country_iso_code: 'RU'`).
+- **Private or mobile endpoints of Russian weather sites (RP5, Gismeteo, Meteoinfo) are not
+  scraped.** Reason: recorded in `docs/weather-providers.md`; only a product decision changes it.
+- **Addresses are stored in clear text** in the JSON store and in `addressLogs`. Reason: product
+  decision, recorded in `README.md`.
+
+## Departures from AGENTS.md
+
+- **Project-specific material lives in this file, not below the Appendix in `AGENTS.md`.**
+  Reason: `install.sh` overwrites `AGENTS.md` wholesale on every rules update, so anything
+  appended there would be lost. `AGENTS.md` is kept byte-identical to the canonical copy.
+
+## Version discipline
+
+The version lives in `package.json` (`0.1.0`). A second version number is embedded in the
+default `USER_AGENT` string — in `src/bot.js` and again in `.env.example` — and it is sent to
+Nominatim and MET Norway, both of which require a descriptive User-Agent. Bumping the package
+version means deciding whether those two strings move with it.
+
+## Deployment
+
+`README.md` records that the service runs on the Oracle server and is deployed from `main`.
+The repository contains no CI workflow, so whether a push to `main` reaches production by
+itself, who may deploy, and what to verify afterwards (§6) are not established here — ask the
+owner before deploying rather than inferring it.
+
+## Open questions for the owner
+
+- Deployment ownership and the post-deploy check (§6), per above.
+- What the owner reviews by hand, and where a pause is expected (§13) — not recorded yet.
