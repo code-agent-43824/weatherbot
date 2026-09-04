@@ -61,10 +61,16 @@ fatal → `aggregateWindows` slices morning/day/evening hour windows → `aggreg
 collapses per-source summaries, drops outliers by a median risk score and derives the
 rain-consensus fields (`rainySourceCount`, `rainMajority`, `severeVotes`, `conflict`) →
 `templateForecast` renders the Russian message → `polishForecastWithLlm` optionally rewords it →
-the whole `windows` object and the final text are appended to `store.forecastLogs`.
+`buildForecastDetails` (`src/forecast-details.js`) appends the per-source block **after** that
+polish → the whole `windows` object and the final text are appended to `store.forecastLogs`.
+
+The order there is load-bearing: the per-source block is made of numbers, units and provider
+names, which is exactly what the LLM validator rejects — send it through `polishForecastWithLlm`
+and the model's reply would be discarded every time sources disagree.
 
 Not every field the aggregate computes reaches the message; the aggregate is also the log
-record. Check `formatWindow`/`templateForecast` for what a user actually sees.
+record. Check `formatWindow`, `templateForecast` and `buildForecastDetails` for what a user
+actually sees.
 
 ### Adding a weather provider
 

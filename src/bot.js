@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createNonOverlappingRunner } from './non-overlapping-runner.js';
+import { buildForecastDetails, formatTempRange } from './forecast-details.js';
 
 const token = process.env.BOT_TOKEN;
 const pollTimeoutSeconds = Number(process.env.POLL_TIMEOUT_SECONDS || 30);
@@ -833,6 +834,7 @@ function aggregateSourceSummaries(summaries) {
     rainMmMax: rainMm.length ? Math.max(...rainMm) : null,
     severe: severeSources.size >= 1 || (rainProb.length && Math.max(...rainProb) >= 70) || (rainMm.length && Math.max(...rainMm) >= 2),
     severeVotes: severeSources.size,
+    sources: kept,
     sourceCount: kept.length,
     rainySourceCount: rainySources.length,
     rainMajority: rainySources.length > kept.length / 2,
@@ -866,14 +868,6 @@ function rainLevel(prob, mm) {
   if (rainProb < 70 && rainMm <= 2) return { rank: 2, label: 'дождь' };
   if (rainProb < 85 && rainMm <= 6) return { rank: 3, label: 'ливень' };
   return { rank: 4, label: 'ураганный ливень' };
-}
-
-function formatTempRange(agg) {
-  if (agg.tempMin == null || agg.tempMax == null) return 'температура н/д';
-  const sign = (value) => (value > 0 ? `+${value}` : String(value));
-  return agg.tempMin === agg.tempMax
-    ? `${sign(agg.tempMin)}°C`
-    : `${sign(agg.tempMin)}…${sign(agg.tempMax)}°C`;
 }
 
 function formatRainWords(agg) {
@@ -1027,7 +1021,12 @@ async function buildForecast(user, scenario, targetDate = null) {
   const date = targetDate || dayOffsetDate(0, timezone);
   const windows = aggregateWindows(weather, date, timezone);
   const draftText = templateForecast(scenario, date, windows);
-  const finalText = await polishForecastWithLlm(draftText);
+  const polishedText = await polishForecastWithLlm(draftText);
+  // Дальний прогноз слаб сам по себе: расхождение в нём ожидаемо, поэтому
+  // вместо предупреждения показываем источники по отдельности.
+  const longRange = scenario.mode === 'planned' && daysUntil(date, timezone) > 7;
+  const details = buildForecastDetails(windows, { longRange });
+  const finalText = details ? `${polishedText}\n${details}` : polishedText;
 
   store.forecastLogs.push({
     tgId: user.tgId,
