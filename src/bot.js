@@ -1335,9 +1335,27 @@ async function cleanupAllExpiredScenarios() {
   }
 }
 
+let shuttingDown = false;
+
 async function main() {
   await loadStore();
   console.log('WeatherBot started');
+
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received, saving store…`);
+    try {
+      await saveStore();
+    } catch (error) {
+      console.error('saveStore on shutdown failed:', error);
+    }
+    console.log('WeatherBot stopped');
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
   try {
     await registerBotCommands();
   } catch (error) {
@@ -1346,6 +1364,7 @@ async function main() {
   await cleanupAllExpiredScenarios();
   setInterval(() => runScheduledForecasts().catch((error) => console.error(error)), 30_000);
   while (true) {
+    if (shuttingDown) break;
     try {
       await pollOnce();
     } catch (error) {
