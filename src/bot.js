@@ -254,13 +254,35 @@ function mainKeyboard() {
   };
 }
 
+const telegramMaxLen = 4096;
+
 async function sendMessage(chatId, text, options = {}) {
-  await callTelegram('sendMessage', {
-    chat_id: chatId,
-    text,
-    disable_web_page_preview: true,
-    reply_markup: options.reply_markup || mainKeyboard(),
-  });
+  const chunks = splitMessage(text, telegramMaxLen);
+  for (let i = 0; i < chunks.length; i += 1) {
+    const isLast = i === chunks.length - 1;
+    await callTelegram('sendMessage', {
+      chat_id: chatId,
+      text: chunks[i],
+      disable_web_page_preview: true,
+      reply_markup: isLast ? (options.reply_markup || mainKeyboard()) : undefined,
+    });
+  }
+}
+
+function splitMessage(text, maxLen) {
+  if (text.length <= maxLen) return [text];
+  const chunks = [];
+  let pos = 0;
+  while (pos < text.length) {
+    let end = Math.min(pos + maxLen, text.length);
+    if (end < text.length) {
+      const lastNewline = text.lastIndexOf('\n', end);
+      if (lastNewline > pos) end = lastNewline;
+    }
+    chunks.push(text.slice(pos, end));
+    pos = end;
+  }
+  return chunks;
 }
 
 async function fetchJson(url, options = {}) {
