@@ -10,19 +10,32 @@ const weatherCacheTtlMs = Math.min(
   300_000,
 );
 
+const maxCacheEntries = 100;
 const weatherCache = new Map();
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'user-agent': userAgent,
-      accept: 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-  if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-  return response.json();
+  const maxRetries = 2;
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          'user-agent': userAgent,
+          accept: 'application/json',
+          ...(options.headers || {}),
+        },
+      });
+      if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+      return response.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
 }
 
 async function fetchCachedWeatherJson(url, options = {}) {
@@ -33,6 +46,11 @@ async function fetchCachedWeatherJson(url, options = {}) {
   if (cached && now - cached.createdAt <= weatherCacheTtlMs) return cached.data;
 
   const data = await fetchJson(url, options);
+
+  if (weatherCache.size >= maxCacheEntries) {
+    const oldestKey = weatherCache.keys().next().value;
+    weatherCache.delete(oldestKey);
+  }
   weatherCache.set(url, { createdAt: now, data });
   return data;
 }
