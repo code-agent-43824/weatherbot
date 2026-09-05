@@ -29,7 +29,7 @@ export function daysUntil(date, timezone) {
 }
 
 export function parseTime(text) {
-  const match = text.trim().match(/^([01]?\d|2[0-3])[:.]([0-5]\d)$/);
+  const match = text.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
   if (!match) return null;
   return `${match[1].padStart(2, '0')}:${match[2]}`;
 }
