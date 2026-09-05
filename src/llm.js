@@ -14,6 +14,9 @@ const systemPrompt = [
   'Формат: 7-8 коротких строк, последняя строка содержит "Итог:".',
 ].join(' ');
 
+// Строки окон дня в черновике начинаются с этих эмодзи — см. templateForecast.
+const windowMarkers = ['🌅', '☀️', '🌆'];
+
 /**
  * Validates that LLM-polished text preserves the structure and meaning
  * of the original draft.
@@ -34,9 +37,17 @@ function validatePolished(text, draft) {
     return false;
   }
 
-  const draftDry = draftLines.some((line) => line.includes('сухо'));
-  const polishedRain = polishedLines.some((line) => line.includes('дождь') || line.includes('ливень'));
-  if (draftDry && polishedRain) return false;
+  // Сухое окно не должно превратиться в дождливое. Сравниваем окна по отдельности:
+  // в обычном дне сухое утро и дождливый вечер живут в одном сообщении, и проверка
+  // по всему тексту отбраковывала бы каждый такой прогноз, включая сам черновик.
+  // «дождя» в родительном падеже пропускаем: «без дождя» — верный пересказ «сухо».
+  for (const marker of windowMarkers) {
+    const draftLine = draftLines.find((line) => line.startsWith(marker));
+    if (!draftLine || !draftLine.includes('сухо')) continue;
+    const polishedLine = polishedLines.find((line) => line.startsWith(marker));
+    if (!polishedLine) return false;
+    if (/(дождь|ливень)/i.test(polishedLine)) return false;
+  }
 
   return true;
 }
