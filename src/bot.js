@@ -19,6 +19,8 @@ const weatherCacheTtlMs = Math.min(
   Math.max(Number(process.env.WEATHER_CACHE_TTL_MS || 300_000), 0),
   300_000,
 );
+const maxForecastLogs = 500;
+const maxAddressLogs = 500;
 
 if (!token) {
   console.error('BOT_TOKEN is required');
@@ -1047,6 +1049,9 @@ async function buildForecast(user, scenario, targetDate = null) {
     windows,
     message: finalText,
   });
+  if (store.forecastLogs.length > maxForecastLogs) {
+    store.forecastLogs = store.forecastLogs.slice(-maxForecastLogs);
+  }
   await saveStore();
   return finalText;
 }
@@ -1176,6 +1181,9 @@ async function handleSetup(chatId, user, text) {
       provider: address.provider,
       createdAt: new Date().toISOString(),
     });
+    if (store.addressLogs.length > maxAddressLogs) {
+      store.addressLogs = store.addressLogs.slice(-maxAddressLogs);
+    }
     const precisionNote = address.exactHouse
       ? ''
       : '\n\nВажно: точный дом геокодер не подтвердил, взял ближайшую улично-районную точку. Для прогноза по району этого достаточно.';
