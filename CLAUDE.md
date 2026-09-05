@@ -116,6 +116,17 @@ Deliberate, with reasons; not to be reopened on an agent's initiative (§8).
   emoji — the deterministic draft is sent instead. Reason: a model must never be the source of a
   probability or a ride/don't-ride recommendation. Any change to `templateForecast` keeps that
   validator in sync.
+- **The regular commute is asymmetric and must stay that way.** Morning and evening are the
+  windows the rider is out on the bike; during the day the bike is parked at the office. So rain
+  in the day window never produces a "don't ride" verdict — it produces "keep it under a roof" —
+  while the morning and evening windows do (`rideNoGoScore` / `parkedRainScore` in
+  `src/aggregate.js`). Reason: this asymmetry is the whole point of the `regular` mode, and
+  collapsing the three windows into one maximum has already shipped once and had to be undone —
+  it told riders to leave the bike at home on days that were dry for both commutes.
+- **The risk score behind the verdict is also what the message text reports.** `formatRainWords`
+  and the recommendations both read `riskScoreForAggregate`. Reason: while the prose sentence ran
+  off `rainMajority` and the verdict off the score, one message could say the rain was unlikely
+  and refuse the ride in the same breath.
 - **OpenWeather One Call 3.0 is supported by code but not to be enabled without a daily billing
   limit.** Reason: billing overage risk is not acceptable for this project
   (`docs/credentials.md`, `docs/weather-providers.md`).

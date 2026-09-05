@@ -131,17 +131,11 @@ export function aggregateWindows(weather, date, timezone) {
   return sourceResults;
 }
 
-export function windowHasRainRisk(window) {
-  const agg = window.aggregate;
-  if (!agg) return false;
-  return Boolean(agg.rainMajority);
-}
-
-export function windowHasAnyRain(window) {
-  const agg = window.aggregate;
-  if (!agg) return false;
-  return Boolean(agg.rainySourceCount > 0);
-}
+// Порог для окна, в котором едут: выше — ехать не стоит. Воспроизводит прежнее
+// правило «дождь у большинства источников», но по баллу, а не по голосованию.
+const rideNoGoScore = 40;
+// Порог для окна, в котором мотоцикл стоит: выше — держать его под крышей.
+const parkedRainScore = 20;
 
 /**
  * Multi-factor rain risk score (0–100).
@@ -151,8 +145,7 @@ export function windowHasAnyRain(window) {
  * Factor 3 — probability (0–20): average rain probability across sources.
  * Factor 4 — conflict (0–10): penalty when sources disagree strongly.
  */
-export function calculateRiskScore(window) {
-  const agg = window.aggregate;
+function riskScoreForAggregate(agg) {
   if (!agg || !agg.sourceCount) return 0;
 
   const rainFraction = agg.rainySourceCount / agg.sourceCount;
@@ -169,14 +162,18 @@ export function calculateRiskScore(window) {
   return Math.min(100, consensusScore + intensityScore + probScore + conflictScore);
 }
 
+export function calculateRiskScore(window) {
+  return riskScoreForAggregate(window?.aggregate);
+}
+
 /**
  * Returns risk level label based on risk score.
  */
 export function riskLevelLabel(score) {
-  if (score <= 20) return 'нет риска';
-  if (score <= 40) return 'низкий риск';
-  if (score <= 60) return 'умеренный риск';
-  return 'высокий риск';
+  if (score <= parkedRainScore) return 'незначительный';
+  if (score <= rideNoGoScore) return 'низкий';
+  if (score <= 60) return 'умеренный';
+  return 'высокий';
 }
 
 export function formatRainWords(agg) {
@@ -191,8 +188,11 @@ export function formatRainWords(agg) {
   const strength = agg.rainMinLabel === agg.rainMaxLabel
     ? agg.rainMaxLabel
     : `от ${genitive[agg.rainMinLabel] || agg.rainMinLabel} до ${genitive[agg.rainMaxLabel] || agg.rainMaxLabel}`;
-  const probability = agg.rainMajority ? 'Вероятность дождя большая.' : 'Вероятность дождя небольшая.';
-  return `${agg.rainySourceCount} из ${agg.sourceCount} источников обещают дождь: ${strength}. ${probability}`;
+  // Риск берём тем же баллом, что и вердикт: иначе строка про окно и «Итог»
+  // расходятся — два источника с ливнем из пяти давали «вероятность небольшая»
+  // рядом с «на мото лучше не ехать».
+  const risk = `Дождевой риск ${riskLevelLabel(riskScoreForAggregate(agg))}.`;
+  return `${agg.rainySourceCount} из ${agg.sourceCount} источников обещают дождь: ${strength}. ${risk}`;
 }
 
 export function formatWindow(window) {
@@ -202,20 +202,20 @@ export function formatWindow(window) {
   return `${window.label}: ${formatTempRange(agg)}, ${formatRainWords(agg)}${outlierNote}`;
 }
 
+// Регулярный маршрут асимметричен: утро и вечер человек едет, днём мотоцикл стоит
+// у офиса. Дневной дождь поэтому не запрещает поездку, а требует крыши над стоянкой.
 export function buildMotoRecommendation(windows) {
   const morningScore = calculateRiskScore(windows.morning);
   const dayScore = calculateRiskScore(windows.day);
   const eveningScore = calculateRiskScore(windows.evening);
-  const maxScore = Math.max(morningScore, dayScore, eveningScore);
 
-  if (maxScore > 60) {
-    const where = morningScore > 60 ? 'уже утром' : (eveningScore > 60 ? 'на обратном пути' : 'днём');
-    return `Итог: на мото лучше не ехать: дождь ${where}.`;
+  if (morningScore > rideNoGoScore) {
+    return 'Итог: на мото лучше не ехать: дождь уже утром.';
   }
-  if (maxScore > 40) {
-    return 'Итог: поездка под вопросом, дождевик обязателен.';
+  if (eveningScore > rideNoGoScore) {
+    return 'Итог: на мото лучше не ехать: вечером можно промокнуть на обратном пути.';
   }
-  if (maxScore > 20) {
+  if (dayScore > parkedRainScore) {
     return 'Итог: ехать можно, но днём держать мото под крышей.';
   }
   return 'Итог: можно ехать на мото, заметного дождевого риска нет.';

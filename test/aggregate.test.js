@@ -129,52 +129,71 @@ describe('calculateRiskScore', () => {
 });
 
 describe('riskLevelLabel', () => {
-  it('labels score 0 as no risk', () => {
-    assert.equal(riskLevelLabel(0), 'нет риска');
+  it('labels a score at the parked threshold as negligible', () => {
+    assert.equal(riskLevelLabel(0), 'незначительный');
+    assert.equal(riskLevelLabel(20), 'незначительный');
   });
 
-  it('labels score 30 as low risk', () => {
-    assert.equal(riskLevelLabel(30), 'низкий риск');
+  it('labels a score up to the no-go threshold as low', () => {
+    assert.equal(riskLevelLabel(21), 'низкий');
+    assert.equal(riskLevelLabel(40), 'низкий');
   });
 
-  it('labels score 50 as moderate risk', () => {
-    assert.equal(riskLevelLabel(50), 'умеренный риск');
+  it('labels a score above the no-go threshold as moderate', () => {
+    assert.equal(riskLevelLabel(41), 'умеренный');
+    assert.equal(riskLevelLabel(60), 'умеренный');
   });
 
-  it('labels score 80 as high risk', () => {
-    assert.equal(riskLevelLabel(80), 'высокий риск');
+  it('labels a score above 60 as high', () => {
+    assert.equal(riskLevelLabel(61), 'высокий');
   });
 });
 
 describe('buildMotoRecommendation', () => {
+  const dry = () => makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]);
+
   it('recommends riding when all windows are dry', () => {
-    const windows = {
-      morning: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
-      day: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
-      evening: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
-    };
-    const rec = buildMotoRecommendation(windows);
-    assert.match(rec, /можно ехать/);
+    const rec = buildMotoRecommendation({ morning: dry(), day: dry(), evening: dry() });
+    assert.equal(rec, 'Итог: можно ехать на мото, заметного дождевого риска нет.');
   });
 
-  it('recommends not riding with severe rain across windows', () => {
+  it('keeps the ride when rain falls only while the bike is parked', () => {
     const windows = {
-      morning: makeWindow([severeSrc('A'), severeSrc('B'), severeSrc('C')]),
+      morning: dry(),
       day: makeWindow([severeSrc('A'), severeSrc('B'), severeSrc('C')]),
-      evening: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
+      evening: dry(),
     };
     const rec = buildMotoRecommendation(windows);
-    assert.match(rec, /не ехать/);
+    assert.equal(rec, 'Итог: ехать можно, но днём держать мото под крышей.');
+    assert.doesNotMatch(rec, /не ехать/);
   });
 
-  it('recommends caution with moderate rain', () => {
+  it('calls off the ride when every source reports rain in the morning', () => {
     const windows = {
       morning: makeWindow([rainy50('A'), rainy50('B'), rainy50('C')]),
-      day: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
-      evening: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
+      day: dry(),
+      evening: dry(),
+    };
+    assert.equal(buildMotoRecommendation(windows), 'Итог: на мото лучше не ехать: дождь уже утром.');
+  });
+
+  it('calls off the ride when the rain waits for the way back', () => {
+    const windows = {
+      morning: dry(),
+      day: dry(),
+      evening: makeWindow([severeSrc('A'), severeSrc('B'), severeSrc('C')]),
     };
     const rec = buildMotoRecommendation(windows);
-    assert.match(rec, /под вопросом|не ехать|крышей/);
+    assert.equal(rec, 'Итог: на мото лучше не ехать: вечером можно промокнуть на обратном пути.');
+  });
+
+  it('never blames the commute wording on a trip', () => {
+    const windows = {
+      morning: makeWindow([rainy50('A'), rainy50('B'), rainy50('C')]),
+      day: makeWindow([severeSrc('A'), severeSrc('B'), severeSrc('C')]),
+      evening: dry(),
+    };
+    assert.doesNotMatch(buildMotoRecommendation(windows), /поездка/);
   });
 });
 
@@ -189,14 +208,23 @@ describe('buildTripRecommendation', () => {
     assert.match(rec, /перенести|не на мото/);
   });
 
-  it('recommends rain gear when rain detected in any window', () => {
+  it('puts a trip in doubt when every source reports rain in one window', () => {
     const windows = {
       morning: makeWindow([rainy50('A'), rainy50('B'), rainy50('C')]),
       day: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
       evening: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
     };
     const rec = buildTripRecommendation(windows);
-    assert.match(rec, /дождевик|под вопросом|перенести/);
+    assert.equal(rec, 'Итог: поездка под вопросом, дождевик обязателен.');
+  });
+
+  it('treats the day as a riding window on a trip, unlike a commute', () => {
+    const windows = {
+      morning: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
+      day: makeWindow([severeSrc('A'), severeSrc('B'), severeSrc('C')]),
+      evening: makeWindow([dryLight('A'), dryLight('B'), dryLight('C')]),
+    };
+    assert.match(buildTripRecommendation(windows), /под вопросом|перенести/);
   });
 
   it('recommends favorable weather when all windows are dry', () => {

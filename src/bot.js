@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createNonOverlappingRunner } from './non-overlapping-runner.js';
 import { buildForecastDetails } from './forecast-details.js';
