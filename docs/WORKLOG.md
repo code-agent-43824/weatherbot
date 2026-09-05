@@ -1,5 +1,27 @@
 # WORKLOG
 
+## 2026-09-05 — разбор монолита bot.js
+
+**План.** `src/bot.js` — 1399 строк в одном файле: Telegram polling,
+геокодинг, сбор погоды, агрегация, форматирование, LLM-редактура,
+persistence — всё вместе. Ничего не экспортируется, тестировать
+основную логику невозможно.
+
+**Сделано.** Из `bot.js` выделены 5 модулей:
+- `src/datetime.js` (43 строки) — утилиты дат и парсинг
+- `src/telegram.js` (76 строк) — Telegram API: callTelegram, sendMessage,
+  registerBotCommands, splitMessage
+- `src/geocode.js` (157 строк) — геокодинг: DaData + Nominatim fallback
+- `src/weather.js` (300 строк) — сбор погоды из 7 провайдеров, кэш,
+  window extraction (openMeteoWindow, metNorwayWindow, и т.д.)
+- `src/aggregate.js` (234 строки) — агрегация, рекомендации,
+  форматирование прогноза
+
+`bot.js` сократился с 1399 до 631 строки. В нём осталось: store,
+команды, main loop, buildForecast, polishForecastWithLlm.
+
+**Проверено.** `npm run check`: `node --check` + 8 тестов, все зелёные.
+
 ## 2026-09-05 — разбиение длинных сообщений
 
 **План.** Telegram ограничивает длину сообщения 4096 символами. При большом
