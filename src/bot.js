@@ -268,6 +268,16 @@ async function polishForecastWithLlm(draft) {
     if (!text || banned.test(text) || !text.includes('По нескольким источникам') || !text.includes('Итог:') || !/[🏍️📍📅🌦️🌅☀️🌆✅]/u.test(text)) {
       return draft;
     }
+    const draftLines = draft.split('\n').filter(Boolean);
+    const polishedLines = text.split('\n').filter(Boolean);
+    if (polishedLines.length < draftLines.length - 2 || polishedLines.length > draftLines.length + 2) {
+      return draft;
+    }
+    const draftDry = draftLines.some((line) => line.includes('сухо'));
+    const polishedRain = polishedLines.some((line) => line.includes('дождь') || line.includes('ливень'));
+    if (draftDry && polishedRain) {
+      return draft;
+    }
     return text;
   } catch (error) {
     console.error('OpenRouter failed:', error.message);

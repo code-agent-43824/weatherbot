@@ -57,7 +57,7 @@ export function aggregateSourceSummaries(summaries) {
     ? sourceSummaries.filter((summary) => {
       const score = riskScore(summary);
       const closeToMedian = sourceSummaries.filter((other) => Math.abs(riskScore(other) - medianScore) <= 1.8).length;
-      return closeToMedian < 2 || Math.abs(score - medianScore) < 3;
+      return closeToMedian < 2 || Math.abs(score - medianScore) < 2;
     })
     : sourceSummaries;
   const kept = filtered.length ? filtered : sourceSummaries;
