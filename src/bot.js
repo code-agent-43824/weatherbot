@@ -34,6 +34,7 @@ let store = {
 };
 let lastNominatimCall = 0;
 const weatherCache = new Map();
+let saveChain = Promise.resolve();
 
 async function loadStore() {
   try {
@@ -46,9 +47,15 @@ async function loadStore() {
   }
 }
 
-async function saveStore() {
-  await mkdir(dirname(dataFile), { recursive: true });
-  await writeFile(dataFile, JSON.stringify(store, null, 2));
+function saveStore() {
+  const data = JSON.stringify(store, null, 2);
+  saveChain = saveChain
+    .catch(() => {})
+    .then(async () => {
+      await mkdir(dirname(dataFile), { recursive: true });
+      await writeFile(dataFile, data);
+    });
+  return saveChain;
 }
 
 function userState(tgId) {
