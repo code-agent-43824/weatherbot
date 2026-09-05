@@ -1,5 +1,23 @@
 # WORKLOG
 
+## 2026-09-05 — LLM module, provider error logging, aggregate tests
+
+**План.** (E) `polishForecastWithLlm` жил в `bot.js`, нельзя было
+тестировать. (D) Ошибки провайдеров в `collectWeather` silently
+drop'ались — в проде непонятно, кто упал. (C) `aggregate.js` не имел
+тестов, критическая логика не покрывалась.
+
+**Сделано.** (E) Вынесен `src/llm.js` с `polishForecastWithLlm` и
+`validatePolished`. `bot.js` импортирует из модуля. (D) `collectWeather`
+теперь логирует `console.error` с именем провайдера при rejected
+promise. (C) Добавлен `test/aggregate.test.js` — 16 тестов: rainLevel
+(3), aggregateSourceSummaries (8), windowHasRainRisk (3),
+windowHasAnyRain (2), buildMotoRecommendation (3), buildTripRecommendation
+(3).
+
+**Проверено.** `npm run check`: `node --check` + 30 тестов (было 8),
+все зелёные.
+
 ## 2026-09-05 — atomic store writes and fetch timeout
 
 **План.** (A) `saveStore` писал прямо в `data/weatherbot.json` —

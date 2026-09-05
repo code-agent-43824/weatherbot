@@ -1,0 +1,74 @@
+const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
+const openRouterModel = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct';
+
+const systemPrompt = [
+  'Ты редактор короткого Telegram-прогноза для мотоциклиста.',
+  'Используй только готовый черновик; не добавляй погодные факты, числа, проценты, миллиметры или названия провайдеров.',
+  'Обязательно сохрани смысл каждой строки по окнам дня.',
+  'Если строка содержит "X из Y источников", сохрани X, Y, силу дождя и фразу про большую/небольшую вероятность.',
+  'Если строка содержит "сухо", не превращай её в дождь.',
+  'Обязательно оставь фразу "По нескольким источникам.".',
+  'Сохрани короткую преамбулу со сценарием, маршрутом и датой.',
+  'Сохрани эмодзи в начале строк.',
+  'Не рассуждай про машины и транспорт.',
+  'Формат: 7-8 коротких строк, последняя строка содержит "Итог:".',
+].join(' ');
+
+/**
+ * Validates that LLM-polished text preserves the structure and meaning
+ * of the original draft.
+ */
+function validatePolished(text, draft) {
+  if (!text) return false;
+
+  const banned = /(мм|%|Open-Meteo|MET Norway|7Timer|WeatherAPI|Tomorrow|Meteosource|DaData|машин|транспорт)/i;
+  if (banned.test(text)) return false;
+
+  if (!text.includes('По нескольким источникам')) return false;
+  if (!text.includes('Итог:')) return false;
+  if (!/[🏍️📍📅🌦️🌅☀️🌆✅]/u.test(text)) return false;
+
+  const draftLines = draft.split('\n').filter(Boolean);
+  const polishedLines = text.split('\n').filter(Boolean);
+  if (polishedLines.length < draftLines.length - 2 || polishedLines.length > draftLines.length + 2) {
+    return false;
+  }
+
+  const draftDry = draftLines.some((line) => line.includes('сухо'));
+  const polishedRain = polishedLines.some((line) => line.includes('дождь') || line.includes('ливень'));
+  if (draftDry && polishedRain) return false;
+
+  return true;
+}
+
+export async function polishForecastWithLlm(draft) {
+  if (!openRouterApiKey) return draft;
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${openRouterApiKey}`,
+        'content-type': 'application/json',
+        'http-referer': 'https://github.com/code-agent-43824/weatherbot',
+        'x-title': 'WeatherBot',
+      },
+      body: JSON.stringify({
+        model: openRouterModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: draft },
+        ],
+        temperature: 0.1,
+        max_tokens: 350,
+      }),
+    });
+    const data = await response.json();
+    const text = String(data.choices?.[0]?.message?.content || '').trim();
+    return validatePolished(text, draft) ? text : draft;
+  } catch (error) {
+    console.error('OpenRouter failed:', error.message);
+    return draft;
+  }
+}
+
+export { validatePolished };

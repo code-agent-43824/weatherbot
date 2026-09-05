@@ -151,19 +151,25 @@ async function meteosource(point) {
 export async function collectWeather(points) {
   const results = [];
   for (const point of points) {
-    const calls = [
-      openMeteo(point),
-      metNorway(point),
-      sevenTimer(point),
-      openWeather(point),
-      weatherApi(point),
-      tomorrow(point),
-      meteosource(point),
-    ].filter(Boolean);
+    const taggedCalls = [
+      { source: 'Open-Meteo', fn: openMeteo },
+      { source: 'MET Norway', fn: metNorway },
+      { source: '7Timer', fn: sevenTimer },
+      { source: 'OpenWeather', fn: openWeather },
+      { source: 'WeatherAPI', fn: weatherApi },
+      { source: 'Tomorrow.io', fn: tomorrow },
+      { source: 'Meteosource', fn: meteosource },
+    ];
+    const calls = taggedCalls.map(({ fn }) => fn(point));
     const settled = await Promise.allSettled(calls);
-    for (const item of settled) {
-      if (item.status === 'fulfilled' && item.value) results.push(item.value);
-      else if (item.status === 'rejected') results.push({ source: 'error', point, error: item.reason.message });
+    for (let i = 0; i < settled.length; i += 1) {
+      const item = settled[i];
+      if (item.status === 'fulfilled' && item.value) {
+        results.push(item.value);
+      } else if (item.status === 'rejected') {
+        console.error(`Weather provider ${taggedCalls[i].source} failed:`, item.reason.message);
+        results.push({ source: 'error', point, error: item.reason.message });
+      }
     }
   }
   return results;

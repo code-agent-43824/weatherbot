@@ -5,6 +5,7 @@ import { buildForecastDetails } from './forecast-details.js';
 import { callTelegram, sendMessage, registerBotCommands } from './telegram.js';
 import { geocodeRussia } from './geocode.js';
 import { collectWeather, openMeteo } from './weather.js';
+import { polishForecastWithLlm } from './llm.js';
 import {
   aggregateWindows,
   templateForecast,
@@ -23,8 +24,6 @@ import {
 
 const pollTimeoutSeconds = Number(process.env.POLL_TIMEOUT_SECONDS || 30);
 const dataFile = process.env.DATA_FILE || './data/weatherbot.json';
-const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
-const openRouterModel = process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free';
 
 let offset = 0;
 let store = {
@@ -227,64 +226,6 @@ function routePoints(from, to) {
     },
     to,
   ];
-}
-
-async function polishForecastWithLlm(draft) {
-  if (!openRouterApiKey) return draft;
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${openRouterApiKey}`,
-        'content-type': 'application/json',
-        'http-referer': 'https://github.com/code-agent-43824/weatherbot',
-        'x-title': 'WeatherBot',
-      },
-      body: JSON.stringify({
-        model: openRouterModel,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'Ты редактор короткого Telegram-прогноза для мотоциклиста.',
-              'Используй только готовый черновик; не добавляй погодные факты, числа, проценты, миллиметры или названия провайдеров.',
-              'Обязательно сохрани смысл каждой строки по окнам дня.',
-              'Если строка содержит "X из Y источников", сохрани X, Y, силу дождя и фразу про большую/небольшую вероятность.',
-              'Если строка содержит "сухо", не превращай её в дождь.',
-              'Обязательно оставь фразу "По нескольким источникам.".',
-              'Сохрани короткую преамбулу со сценарием, маршрутом и датой.',
-              'Сохрани эмодзи в начале строк.',
-              'Не рассуждай про машины и транспорт.',
-              'Формат: 7-8 коротких строк, последняя строка содержит "Итог:".',
-            ].join(' '),
-          },
-          { role: 'user', content: draft },
-        ],
-        temperature: 0.1,
-        max_tokens: 350,
-      }),
-    });
-    const data = await response.json();
-    const text = String(data.choices?.[0]?.message?.content || '').trim();
-    const banned = /(мм|%|Open-Meteo|MET Norway|7Timer|WeatherAPI|Tomorrow|Meteosource|DaData|машин|транспорт)/i;
-    if (!text || banned.test(text) || !text.includes('По нескольким источникам') || !text.includes('Итог:') || !/[🏍️📍📅🌦️🌅☀️🌆✅]/u.test(text)) {
-      return draft;
-    }
-    const draftLines = draft.split('\n').filter(Boolean);
-    const polishedLines = text.split('\n').filter(Boolean);
-    if (polishedLines.length < draftLines.length - 2 || polishedLines.length > draftLines.length + 2) {
-      return draft;
-    }
-    const draftDry = draftLines.some((line) => line.includes('сухо'));
-    const polishedRain = polishedLines.some((line) => line.includes('дождь') || line.includes('ливень'));
-    if (draftDry && polishedRain) {
-      return draft;
-    }
-    return text;
-  } catch (error) {
-    console.error('OpenRouter failed:', error.message);
-    return draft;
-  }
 }
 
 async function buildForecast(user, scenario, targetDate = null) {
