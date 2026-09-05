@@ -7,7 +7,7 @@
 
 ## Что проверено в этой сессии
 
-- `npm run check` проходит: `node --check src/bot.js` + восемь тестов
+- `npm run check` проходит: `node --check src/bot.js` + 31 тест, все зелёные.
   (`test/non-overlapping-runner.test.js`, `test/forecast-details.test.js`), все зелёные.
 - Линтера, форматтера, сборки и CI-workflow в репозитории нет. Зависимостей нет,
   `node_modules/` не создаётся.

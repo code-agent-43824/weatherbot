@@ -10,8 +10,6 @@ import {
   aggregateWindows,
   templateForecast,
   formatWindow,
-  windowHasRainRisk,
-  windowHasAnyRain,
 } from './aggregate.js';
 import {
   isoDateInTimezone,

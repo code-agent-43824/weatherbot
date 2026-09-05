@@ -1,5 +1,24 @@
 # WORKLOG
 
+## 2026-09-05 — multi-factor risk score (#11)
+
+**План.** Заменить бинарный порог `rainMajority` (>50% источников)
+на непрерывный risk score (0–100) из 4 факторов: консенсус
+источников (0–40), интенсивность дождя (0–30), средняя вероятность
+(0–20), штраф за конфликт (0–10).
+
+**Сделано.**
+- `calculateRiskScore(window)` — 4 фактора, сумма 0–100.
+- `riskLevelLabel(score)` — 4 уровня: нет риска / низкий / умеренный / высокий.
+- `buildMotoRecommendation` и `buildTripRecommendation` переведены
+  на risk score с порогами 20/40/60.
+- `aggregateSourceSummaries` теперь возвращает `rainMinRank` и
+  `rainMaxRank` для использования в `calculateRiskScore`.
+- Удалены неиспользуемые импорты `windowHasRainRisk` и
+  `windowHasAnyRain` из `bot.js`.
+
+**Проверено.** `npm run check`: 31 тест, все зелёные.
+
 ## 2026-09-05 — fix parseTime to only accept colon separator
 
 **План.** (F) `parseTime` принимал `08.30` (точка), но в сообщениях

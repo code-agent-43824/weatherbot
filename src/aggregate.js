@@ -93,6 +93,8 @@ export function aggregateSourceSummaries(summaries) {
     sourceCount: kept.length,
     rainySourceCount: rainySources.length,
     rainMajority: rainySources.length > kept.length / 2,
+    rainMinRank: minRainRank,
+    rainMaxRank: maxRainRank,
     rainMinLabel: levelLabel(minRainRank),
     rainMaxLabel: levelLabel(maxRainRank),
     originalSourceCount: sourceSummaries.length,
@@ -141,6 +143,42 @@ export function windowHasAnyRain(window) {
   return Boolean(agg.rainySourceCount > 0);
 }
 
+/**
+ * Multi-factor rain risk score (0–100).
+ *
+ * Factor 1 — consensus (0–40): what fraction of sources report rain.
+ * Factor 2 — intensity (0–30): the strongest rain level among sources.
+ * Factor 3 — probability (0–20): average rain probability across sources.
+ * Factor 4 — conflict (0–10): penalty when sources disagree strongly.
+ */
+export function calculateRiskScore(window) {
+  const agg = window.aggregate;
+  if (!agg || !agg.sourceCount) return 0;
+
+  const rainFraction = agg.rainySourceCount / agg.sourceCount;
+  const consensusScore = Math.round(rainFraction * 40);
+
+  const maxRank = agg.rainMaxRank || 0;
+  const intensityScore = [0, 10, 20, 25, 30][maxRank] || 0;
+
+  const avgProb = agg.rainProb || 0;
+  const probScore = Math.round((avgProb / 100) * 20);
+
+  const conflictScore = agg.conflict ? 10 : 0;
+
+  return Math.min(100, consensusScore + intensityScore + probScore + conflictScore);
+}
+
+/**
+ * Returns risk level label based on risk score.
+ */
+export function riskLevelLabel(score) {
+  if (score <= 20) return 'нет риска';
+  if (score <= 40) return 'низкий риск';
+  if (score <= 60) return 'умеренный риск';
+  return 'высокий риск';
+}
+
 export function formatRainWords(agg) {
   if (!agg.sourceCount) return 'осадки н/д';
   if (!agg.rainySourceCount) return 'сухо';
@@ -165,34 +203,37 @@ export function formatWindow(window) {
 }
 
 export function buildMotoRecommendation(windows) {
-  const morningRisk = windowHasRainRisk(windows.morning);
-  const dayRisk = windowHasAnyRain(windows.day);
-  const eveningRisk = windowHasRainRisk(windows.evening);
+  const morningScore = calculateRiskScore(windows.morning);
+  const dayScore = calculateRiskScore(windows.day);
+  const eveningScore = calculateRiskScore(windows.evening);
+  const maxScore = Math.max(morningScore, dayScore, eveningScore);
 
-  if (morningRisk) {
-    return 'Итог: на мото лучше не ехать: дождь уже утром.';
+  if (maxScore > 60) {
+    const where = morningScore > 60 ? 'уже утром' : (eveningScore > 60 ? 'на обратном пути' : 'днём');
+    return `Итог: на мото лучше не ехать: дождь ${where}.`;
   }
-  if (eveningRisk) {
-    return 'Итог: на мото лучше не ехать: вечером можно промокнуть на обратном пути.';
+  if (maxScore > 40) {
+    return 'Итог: поездка под вопросом, дождевик обязателен.';
   }
-  if (dayRisk) {
+  if (maxScore > 20) {
     return 'Итог: ехать можно, но днём держать мото под крышей.';
   }
   return 'Итог: можно ехать на мото, заметного дождевого риска нет.';
 }
 
 export function buildTripRecommendation(windows) {
-  const riskyWindows = Object.values(windows).filter(windowHasRainRisk);
-  const rainyWindows = Object.values(windows).filter(windowHasAnyRain);
-  const severeWindows = Object.values(windows).filter((window) => window.aggregate?.severe);
+  const scores = Object.values(windows).map(calculateRiskScore);
+  const maxScore = Math.max(...scores);
+  const highRiskWindows = scores.filter((s) => s > 60).length;
+  const moderateRiskWindows = scores.filter((s) => s > 40).length;
 
-  if (severeWindows.length >= 2 || riskyWindows.length >= 3) {
+  if (highRiskWindows >= 2 || maxScore > 80) {
     return 'Итог: поездку лучше перенести или ехать не на мото.';
   }
-  if (severeWindows.length || riskyWindows.length >= 2) {
+  if (moderateRiskWindows >= 2 || maxScore > 60) {
     return 'Итог: поездка под вопросом, дождевик обязателен.';
   }
-  if (rainyWindows.length) {
+  if (maxScore > 20) {
     return 'Итог: ехать можно, но взять дождевик.';
   }
   return 'Итог: погода для поездки благоприятная.';
