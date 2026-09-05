@@ -18,9 +18,9 @@ async function fetchJson(url, options = {}) {
   const timeoutMs = 10_000;
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
       const response = await fetch(url, {
         ...options,
         signal: controller.signal,
@@ -30,14 +30,22 @@ async function fetchJson(url, options = {}) {
           ...(options.headers || {}),
         },
       });
-      clearTimeout(timer);
-      if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-      return response.json();
+      if (!response.ok) {
+        const error = new Error(`${url} returned ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return await response.json();
     } catch (error) {
       lastError = error;
+      // Повтор лечит обрыв и 5xx, но не 4xx: ключ от повтора не станет валидным,
+      // а 429 от повторов только хуже — квоты провайдеров здесь на счету.
+      if (error.status >= 400 && error.status < 500) break;
       if (attempt < maxRetries) {
         await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
       }
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastError;
