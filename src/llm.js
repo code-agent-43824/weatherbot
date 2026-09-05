@@ -1,5 +1,6 @@
 const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
-const openRouterModel = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.1-8b-instruct';
+// Дефолт держим тем же, что и в .env.example: бесплатный вариант, без счёта.
+const openRouterModel = process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free';
 
 const systemPrompt = [
   'Ты редактор короткого Telegram-прогноза для мотоциклиста.',
