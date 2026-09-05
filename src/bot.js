@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createNonOverlappingRunner } from './non-overlapping-runner.js';
 import { buildForecastDetails } from './forecast-details.js';
@@ -49,11 +49,13 @@ async function loadStore() {
 
 function saveStore() {
   const data = JSON.stringify(store, null, 2);
+  const tmpFile = `${dataFile}.tmp`;
   saveChain = saveChain
     .catch(() => {})
     .then(async () => {
       await mkdir(dirname(dataFile), { recursive: true });
-      await writeFile(dataFile, data);
+      await writeFile(tmpFile, data);
+      await rename(tmpFile, dataFile);
     });
   return saveChain;
 }

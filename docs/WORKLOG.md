@@ -1,5 +1,19 @@
 # WORKLOG
 
+## 2026-09-05 — atomic store writes and fetch timeout
+
+**План.** (A) `saveStore` писал прямо в `data/weatherbot.json` —
+при kill -9 или OOM mid-write файл повреждался, все сценарии
+пользователей терялись. (B) `fetch` в `weather.js` не имел timeout —
+зависший провайдер блокировал `collectWeather` бесконечно.
+
+**Сделано.** (A) `saveStore` пишет в `*.tmp`, затем `rename` —
+атомарная операция в POSIX, файл никогда не повредится. (B) Каждый
+`fetchJson` создаёт `AbortController` с timeout 10с — если провайдер
+не ответил, запрос прерывается и идёт retry.
+
+**Проверено.** `npm run check`: `node --check` + 8 тестов, все зелёные.
+
 ## 2026-09-05 — tighter outlier filtering and LLM validation
 
 **План.** (#9) Порог отбрасывания выбросов `|score - median| < 3` был

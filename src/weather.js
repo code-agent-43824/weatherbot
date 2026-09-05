@@ -15,17 +15,22 @@ const weatherCache = new Map();
 
 async function fetchJson(url, options = {}) {
   const maxRetries = 2;
+  const timeoutMs = 10_000;
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       const response = await fetch(url, {
         ...options,
+        signal: controller.signal,
         headers: {
           'user-agent': userAgent,
           accept: 'application/json',
           ...(options.headers || {}),
         },
       });
+      clearTimeout(timer);
       if (!response.ok) throw new Error(`${url} returned ${response.status}`);
       return response.json();
     } catch (error) {

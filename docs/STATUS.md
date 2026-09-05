@@ -35,7 +35,8 @@
 - Retry с backoff: до 2 повторных попыток при сбое провайдера (1с, 2с).
 - LRU eviction для `weatherCache`: лимит 100 записей, самая старая
   удаляется при превышении.
-- Outlier filtering: порог отбрасывания выбросов снижен с 3 до 2.
+- Atomic store writes: `saveStore` writes to `*.tmp` then `rename`.
+- Fetch timeout: `AbortController` with 10s timeout per provider request.
 - LLM validation: проверка количества строк (±2) и сохранения «сухо».
 - `forecastLogs` и `addressLogs` обрезаются до 500 записей: файл данных не
   растёт без ограничений.
