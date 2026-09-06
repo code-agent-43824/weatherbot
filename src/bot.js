@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { createNonOverlappingRunner } from './non-overlapping-runner.js';
 import { buildForecastDetails } from './forecast-details.js';
 import { callTelegram, sendMessage, registerBotCommands } from './telegram.js';
+import { requireBotToken } from './config.js';
 import { geocodeRussia } from './geocode.js';
 import { collectWeather, openMeteo } from './weather.js';
 import { polishForecastWithLlm } from './llm.js';
@@ -543,6 +544,7 @@ async function cleanupAllExpiredScenarios() {
 let shuttingDown = false;
 
 async function main() {
+  requireBotToken();
   await loadStore();
   console.log('WeatherBot started');
 

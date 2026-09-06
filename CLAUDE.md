@@ -159,9 +159,9 @@ Deliberate, with reasons; not to be reopened on an agent's initiative (§8).
 ## Version discipline
 
 The version lives in `package.json` (`0.1.0`). A second version number is embedded in the
-default `USER_AGENT` string — in `src/weather.js`, again in `src/geocode.js` and again in
-`.env.example` — and it is sent to Nominatim and MET Norway, both of which require a descriptive
-User-Agent. Bumping the package version means deciding whether those strings move with it.
+default `USER_AGENT` string — in `src/config.js` and again in `.env.example` — and it is sent to
+Nominatim and MET Norway, both of which require a descriptive User-Agent. Bumping the package
+version means deciding whether those two strings move with it.
 
 ## Deployment
 

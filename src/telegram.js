@@ -1,15 +1,9 @@
-const token = process.env.BOT_TOKEN;
+import { botToken } from './config.js';
 
-if (!token) {
-  console.error('BOT_TOKEN is required');
-  process.exit(1);
-}
-
-const apiBase = `https://api.telegram.org/bot${token}`;
 const telegramMaxLen = 4096;
 
 export async function callTelegram(method, payload) {
-  const response = await fetch(`${apiBase}/${method}`, {
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),

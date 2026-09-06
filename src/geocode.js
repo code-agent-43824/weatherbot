@@ -1,4 +1,5 @@
-const userAgent = process.env.USER_AGENT || 'WeatherBot/0.2 (https://github.com/code-agent-43824/weatherbot)';
+import { userAgent } from './config.js';
+
 const dadataApiKey = process.env.DADATA_API_KEY || '';
 const dadataSecretKey = process.env.DADATA_SECRET_KEY || '';
 

@@ -1,6 +1,6 @@
 import { isoDateInTimezone, hhmmInTimezone } from './datetime.js';
+import { userAgent } from './config.js';
 
-const userAgent = process.env.USER_AGENT || 'WeatherBot/0.2 (https://github.com/code-agent-43824/weatherbot)';
 const openWeatherApiKey = process.env.OPENWEATHER_API_KEY || '';
 const weatherApiKey = process.env.WEATHERAPI_KEY || '';
 const tomorrowApiKey = process.env.TOMORROW_API_KEY || '';
