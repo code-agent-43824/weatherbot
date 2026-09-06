@@ -40,24 +40,30 @@ export async function registerBotCommands() {
   });
 }
 
-function splitMessage(text, maxLen) {
+export function splitMessage(text, maxLen = telegramMaxLen) {
   if (text.length <= maxLen) return [text];
   const chunks = [];
   let pos = 0;
   while (pos < text.length) {
     let end = Math.min(pos + maxLen, text.length);
+    let next = end;
     if (end < text.length) {
       const lastNewline = text.lastIndexOf('\n', end);
-      if (lastNewline > pos) end = lastNewline;
+      // Режем по переводу строки и сам перевод выбрасываем: он становится границей
+      // сообщений, а иначе следующий кусок открывался бы пустой строкой.
+      if (lastNewline > pos) {
+        end = lastNewline;
+        next = end + 1;
+      }
     }
     chunks.push(text.slice(pos, end));
-    pos = end;
+    pos = next;
   }
   return chunks;
 }
 
 export async function sendMessage(chatId, text, options = {}) {
-  const chunks = splitMessage(text, telegramMaxLen);
+  const chunks = splitMessage(text);
   for (let i = 0; i < chunks.length; i += 1) {
     const isLast = i === chunks.length - 1;
     await callTelegram('sendMessage', {
