@@ -1,5 +1,6 @@
 import { isoDateInTimezone, hhmmInTimezone } from './datetime.js';
 import { userAgent } from './config.js';
+import { createTtlLruCache } from './ttl-lru-cache.js';
 
 const openWeatherApiKey = process.env.OPENWEATHER_API_KEY || '';
 const weatherApiKey = process.env.WEATHERAPI_KEY || '';
@@ -11,7 +12,7 @@ const weatherCacheTtlMs = Math.min(
 );
 
 const maxCacheEntries = 100;
-const weatherCache = new Map();
+const weatherCache = createTtlLruCache({ maxEntries: maxCacheEntries, ttlMs: weatherCacheTtlMs });
 
 async function fetchJson(url, options = {}) {
   const maxRetries = 2;
@@ -54,17 +55,11 @@ async function fetchJson(url, options = {}) {
 async function fetchCachedWeatherJson(url, options = {}) {
   if (weatherCacheTtlMs <= 0) return fetchJson(url, options);
 
-  const now = Date.now();
   const cached = weatherCache.get(url);
-  if (cached && now - cached.createdAt <= weatherCacheTtlMs) return cached.data;
+  if (cached !== undefined) return cached;
 
   const data = await fetchJson(url, options);
-
-  if (weatherCache.size >= maxCacheEntries) {
-    const oldestKey = weatherCache.keys().next().value;
-    weatherCache.delete(oldestKey);
-  }
-  weatherCache.set(url, { createdAt: now, data });
+  weatherCache.set(url, data);
   return data;
 }
 
