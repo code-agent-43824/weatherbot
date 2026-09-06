@@ -4,6 +4,7 @@ import { createNonOverlappingRunner } from './non-overlapping-runner.js';
 import { buildForecastDetails } from './forecast-details.js';
 import { callTelegram, sendMessage, registerBotCommands } from './telegram.js';
 import { requireBotToken } from './config.js';
+import { scenarioSendDecision } from './schedule.js';
 import { geocodeRussia } from './geocode.js';
 import { collectWeather, openMeteo } from './weather.js';
 import { polishForecastWithLlm } from './llm.js';
@@ -511,11 +512,17 @@ async function sendScheduledForecasts() {
       console.error('expired cleanup failed:', user.tgId, error);
     }
     for (const scenario of activeScenarios(user)) {
-      if (!scenario.settings?.time) continue;
-      const timezone = scenario.settings.timezone || 'UTC';
+      const timezone = scenario.settings?.timezone || 'UTC';
       const now = new Date();
       const today = isoDateInTimezone(now, timezone);
-      if (scenario.lastSentDate === today || hhmmInTimezone(now, timezone) !== scenario.settings.time) continue;
+      const decision = scenarioSendDecision(scenario, today, hhmmInTimezone(now, timezone));
+      if (decision === 'wait' || decision === 'done') continue;
+      if (decision === 'skip') {
+        console.error('scheduled window missed:', user.tgId, scenario.id, scenario.settings.time);
+        scenario.lastSentDate = today;
+        await saveStore();
+        continue;
+      }
       try {
         const date = scenario.mode === 'planned' ? scenario.settings.tripDate : null;
         await sendMessage(user.tgId, await buildForecast(user, scenario, date));

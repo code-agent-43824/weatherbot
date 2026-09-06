@@ -35,12 +35,20 @@ after 3s — the process is meant to stay alive.
    Russian reply-keyboard labels mapped in `buttonCommands`) → falling through to
    `handleSetup`, the address/date/time wizard driven by `user.setup.step`.
 2. *Scheduled*: `setInterval` → `runScheduledForecasts` → `sendScheduledForecasts`, which walks
-   every user's active scenarios and sends when `hhmmInTimezone(now, tz) ===
-   scenario.settings.time`. The interval fires more often than once a minute, so
-   `scenario.lastSentDate` is the dedupe guard, and `createNonOverlappingRunner`
+   every user's active scenarios and asks `scenarioSendDecision` (`src/schedule.js`) what to do
+   with each: `send`, `done`, `wait` or `skip`. The interval fires more often than once a
+   minute, so `scenario.lastSentDate` is the dedupe guard, and `createNonOverlappingRunner`
    (`src/non-overlapping-runner.js`) drops a tick while the previous one is still awaiting
    network calls. Both guards are load-bearing; changing the interval or the send condition
    without them reintroduces duplicate messages.
+
+   The decision is "due and not sent today", never "this exact minute". Users and scenarios are
+   walked one at a time and each forecast is a round of network calls, so an exact-minute
+   comparison lost a whole day's send for everyone the walk reached after the minute rolled
+   over — silently, and more often the more users there are. A commute may run up to
+   `commuteCatchUpMinutes` late, after which the day is closed with a log line rather than a
+   breakfast forecast at lunchtime; a planned trip forecasts a future date, so it catches up
+   however late it is.
 
 **Data model.** `store = { users, forecastLogs, addressLogs }`, persisted as one pretty-printed
 JSON file (`DATA_FILE`, default `./data/weatherbot.json`). A user owns N `scenarios`, each
