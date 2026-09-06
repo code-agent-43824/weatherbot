@@ -12,7 +12,7 @@ commands, the map of the code, settled decisions, and departures.
 
 ```bash
 npm start                      # run the bot (BOT_TOKEN is required, the process exits without it)
-npm run check                  # syntax check src/bot.js + run the whole test suite
+npm run check                  # node --check every src/*.js + run the whole test suite
 node --test test/non-overlapping-runner.test.js   # run one test file
 node --test --test-name-pattern 'unlocks after'   # run one test by name
 ```
@@ -48,7 +48,11 @@ JSON file (`DATA_FILE`, default `./data/weatherbot.json`). A user owns N `scenar
 scenarios carry `home`/`office` points; `planned` ones carry `base`/`destination`/`tripDate`.
 
 - `saveStore()` rewrites the whole file. Every mutation needs an `await saveStore()` before the
-  confirming `sendMessage` — there is no transaction, no dirty flag and no periodic flush.
+  confirming `sendMessage` — there is no transaction, no dirty flag and no periodic flush. It
+  snapshots the store synchronously, then queues the write on `saveChain` and lands it through a
+  single `.tmp` file plus `rename`. Both halves are load-bearing: the snapshot keeps a store
+  mutated mid-write out of the file, and the one shared `.tmp` path is only safe because the
+  chain guarantees one write at a time. Parallelise those writes and they clobber each other.
 - `migrateUserState(user)` is the only schema-migration point. It runs on load, inside
   `userState()`, and at the top of each scheduler pass. Older single-scenario users are folded
   into `scenarios[]` there, so a new field gets its default in that function rather than being
@@ -74,7 +78,8 @@ actually sees.
 
 ### Adding a weather provider
 
-Three coordinated edits, all in `src/bot.js`, tied together by the source string:
+Three coordinated edits tied together by the source string — two in `src/weather.js`,
+one in `src/aggregate.js`:
 
 1. A fetch function returning `{ source: '<Name>', point, data }`, or `null` when its API key is
    unset — `collectWeather` filters nulls, and that is how optional providers stay optional.
@@ -83,8 +88,8 @@ Three coordinated edits, all in `src/bot.js`, tied together by the source string
    `{ temp, rainProb, rainMm, code }` rows and returns `summarizeValues(values)`. A provider
    with no real probability field synthesizes one (see `metNorwayWindow`: ~55 when the symbol
    says rain, ~15 otherwise) — such a heuristic stays conservative, it feeds a safety verdict.
-3. Register the call in `collectWeather` and add the `result.source === '<Name>'` branch in
-   `aggregateWindows`.
+3. Register the call in `collectWeather` (`src/weather.js`) and add the
+   `result.source === '<Name>'` branch in `aggregateWindows` (`src/aggregate.js`).
 
 Provider evaluation notes — free-plan limits, what was rejected and why — live in
 `docs/weather-providers.md`; the credential setup steps live in `docs/credentials.md`.
@@ -100,9 +105,10 @@ Provider evaluation notes — free-plan limits, what was rejected and why — li
 - Background failures are caught, logged with a short lowercase prefix
   (`console.error('scheduled forecast failed:', ...)`) and never crash the loop; a failure the
   user is waiting on answers with a Russian apology message instead.
-- `src/bot.js` exports nothing and is covered by `node --check` alone. Logic worth testing is
-  extracted into its own module with a `node:test` file under `test/` —
-  `src/non-overlapping-runner.js` is the pattern to follow.
+- `src/bot.js` exports nothing: it wires the modules together and owns the store, the command
+  handlers and the loops. Logic worth testing is extracted into its own module with a
+  `node:test` file under `test/` — `src/non-overlapping-runner.js` is the pattern to follow.
+  A module must stay importable without side effects, or it takes the test runner down with it.
 - Every environment variable the process reads is listed in `.env.example`; runtime values live
   in the systemd environment file on the server.
 
@@ -153,9 +159,9 @@ Deliberate, with reasons; not to be reopened on an agent's initiative (§8).
 ## Version discipline
 
 The version lives in `package.json` (`0.1.0`). A second version number is embedded in the
-default `USER_AGENT` string — in `src/bot.js` and again in `.env.example` — and it is sent to
-Nominatim and MET Norway, both of which require a descriptive User-Agent. Bumping the package
-version means deciding whether those two strings move with it.
+default `USER_AGENT` string — in `src/weather.js`, again in `src/geocode.js` and again in
+`.env.example` — and it is sent to Nominatim and MET Norway, both of which require a descriptive
+User-Agent. Bumping the package version means deciding whether those strings move with it.
 
 ## Deployment
 
