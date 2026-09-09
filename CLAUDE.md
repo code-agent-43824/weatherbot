@@ -178,9 +178,46 @@ stays out of production — no server access, no restarts, no deploy jobs.
 
 A push to `main` is therefore not a release: the trunk running ahead of the server is the normal
 state, and nothing reaches users until someone deploys by hand. The service runs on the Oracle
-server from `main` (`README.md`), with runtime secrets in the systemd environment file. The exact
-commands are not written down anywhere in the repository — whoever deploys next records them in
-this section.
+server from `main` (`README.md`), with runtime secrets in the systemd environment file.
+
+Deploy from a clean local `main` that has already fetched `origin`. The release is staged and
+tested before the service is stopped; the previous code tree and a mode-preserving data snapshot
+remain on the server for rollback. Nothing reads or copies the systemd environment file.
+
+```bash
+deploy_commit=$(git rev-parse --short=7 HEAD)
+deploy_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+npm run check
+git archive --format=tar.gz -o "/tmp/weatherbot-${deploy_commit}.tar.gz" HEAD
+scp "/tmp/weatherbot-${deploy_commit}.tar.gz" \
+  "oracle-server:/home/opc/apps/weatherbot-${deploy_commit}.tar.gz"
+
+ssh oracle-server "set -eu
+release=/home/opc/apps/weatherbot.release-${deploy_commit}
+archive=/home/opc/apps/weatherbot-${deploy_commit}.tar.gz
+mkdir -m 755 \"\$release\"
+tar -xzf \"\$archive\" -C \"\$release\"
+cd \"\$release\"
+npm run check
+rm -f \"\$archive\"
+sudo -n systemctl stop weatherbot.service
+sudo -n cp --preserve=mode,ownership,timestamps \
+  /var/lib/weatherbot/weatherbot.json \
+  /var/lib/weatherbot/weatherbot.json.predeploy-${deploy_commit}-${deploy_stamp}
+mv /home/opc/apps/weatherbot \
+  /home/opc/apps/weatherbot.rollback-${deploy_commit}-${deploy_stamp}
+mv \"\$release\" /home/opc/apps/weatherbot
+sudo -n systemctl start weatherbot.service
+sudo -n systemctl is-active weatherbot.service
+sudo -n systemctl show weatherbot.service \
+  -p ActiveState -p SubState -p MainPID -p NRestarts -p ActiveEnterTimestamp
+sudo -n journalctl -u weatherbot.service --since '10 minutes ago' --no-pager -n 80
+"
+```
+
+If the new service does not become active, stop it, move the failed tree aside, move the recorded
+`weatherbot.rollback-*` directory back to `/home/opc/apps/weatherbot`, and start the service. Keep
+the data snapshot until the owner has completed the production review.
 
 ## Owner review
 
