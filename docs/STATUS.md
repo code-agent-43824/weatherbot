@@ -55,5 +55,6 @@ Oracle. Сервис active/running, NRestarts=0, stop budget 180 секунд. 
 совпали; сохранены 28 пользователей/8 сценариев и пользовательские настройки.
 Keyless smoke на сервере получил Open-Meteo, MET Norway, 7Timer; окна агрегируются.
 Старое дерево и защищённый JSON-снимок сохранены; пути в HANDOFF.
-Push main пока ждёт авторизации через защищённый GitHub-токен после Gateway restart.
+Коммиты исправлений и отчёта опубликованы в GitHub main с исходными SHA через Git Data API.
+Повторная проверка после Gateway restart подтвердила runtime, данные и состояние сервиса.
 Живые `/forecast` владельца из HANDOFF остаются открытыми.
