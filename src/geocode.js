@@ -1,3 +1,4 @@
+import { fetchJsonWithTimeout } from './http.js';
 import { userAgent } from './config.js';
 
 const dadataApiKey = process.env.DADATA_API_KEY || '';
@@ -6,7 +7,7 @@ const dadataSecretKey = process.env.DADATA_SECRET_KEY || '';
 let lastNominatimCall = 0;
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
+  return fetchJsonWithTimeout(url, {
     ...options,
     headers: {
       'user-agent': userAgent,
@@ -14,8 +15,6 @@ async function fetchJson(url, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-  return response.json();
 }
 
 function buildNominatimQueries(query) {
@@ -93,13 +92,11 @@ async function fetchDaData(url, payload, useSecret = false) {
     accept: 'application/json',
   };
   if (useSecret) headers['x-secret'] = dadataSecretKey;
-  const response = await fetch(url, {
+  return fetchJsonWithTimeout(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`DaData returned ${response.status}`);
-  return response.json();
 }
 
 async function geocodeDaData(query) {

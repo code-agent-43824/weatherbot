@@ -1,15 +1,16 @@
+import { fetchJsonWithTimeout } from './http.js';
 import { botToken } from './config.js';
 
 const telegramMaxLen = 4096;
 
-export async function callTelegram(method, payload) {
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+export async function callTelegram(method, payload, { signal } = {}) {
+  const data = await fetchJsonWithTimeout(`https://api.telegram.org/bot${botToken}/${method}`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
-  });
-  const data = await response.json();
-  if (!data.ok) throw new Error(`${method} failed: ${data.description || response.statusText}`);
+  }, method === 'getUpdates' ? (Number(payload.timeout || 30) + 10) * 1000 : 15_000);
+  if (!data.ok) throw new Error(`${method} failed: ${data.description || 'unknown Telegram error'}`);
   return data.result;
 }
 

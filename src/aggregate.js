@@ -40,7 +40,8 @@ export function aggregateSourceSummaries(summaries) {
       rainMm: rainMm.length ? Math.max(...rainMm) : null,
       severe: rows.some((s) => s.severe),
     };
-  });
+  }).filter((summary) => Number.isFinite(summary.rainProb) && Number.isFinite(summary.rainMm));
+  if (!sourceSummaries.length) return null;
 
   const riskScore = (summary) => Math.max(
     Number(summary.rainProb || 0) / 25,
@@ -118,11 +119,11 @@ export function aggregateWindows(weather, date, timezone) {
       if (result.error) continue;
       let summary = null;
       if (result.source === 'Open-Meteo') summary = openMeteoWindow(result, date, window.hours);
-      if (result.source === 'MET Norway') summary = metNorwayWindow(result, date, window.hours);
+      if (result.source === 'MET Norway') summary = metNorwayWindow(result, date, window.hours, timezone);
       if (result.source === '7Timer') summary = sevenTimerWindow(result, date, window.hours, timezone);
       if (result.source === 'OpenWeather') summary = openWeatherWindow(result, date, window.hours, timezone);
       if (result.source === 'WeatherAPI') summary = weatherApiWindow(result, date, window.hours);
-      if (result.source === 'Tomorrow.io') summary = tomorrowWindow(result, date, window.hours);
+      if (result.source === 'Tomorrow.io') summary = tomorrowWindow(result, date, window.hours, timezone);
       if (result.source === 'Meteosource') summary = meteosourceWindow(result, date, window.hours);
       if (summary) summaries.push({ source: result.source, ...summary });
     }
@@ -204,7 +205,17 @@ export function formatWindow(window) {
 
 // Регулярный маршрут асимметричен: утро и вечер человек едет, днём мотоцикл стоит
 // у офиса. Дневной дождь поэтому не запрещает поездку, а требует крыши над стоянкой.
+function hasCompleteRainData(windows) {
+  return ['morning', 'day', 'evening'].every((key) => {
+    const agg = windows[key]?.aggregate;
+    return agg?.sourceCount > 0 && Number.isFinite(agg.rainProb) && Number.isFinite(agg.rainMm);
+  });
+}
+
+const insufficientDataVerdict = 'Итог: данных о погоде недостаточно, оценить пригодность поездки пока нельзя.';
+
 export function buildMotoRecommendation(windows) {
+  if (!hasCompleteRainData(windows)) return insufficientDataVerdict;
   const morningScore = calculateRiskScore(windows.morning);
   const dayScore = calculateRiskScore(windows.day);
   const eveningScore = calculateRiskScore(windows.evening);
@@ -222,6 +233,7 @@ export function buildMotoRecommendation(windows) {
 }
 
 export function buildTripRecommendation(windows) {
+  if (!hasCompleteRainData(windows)) return insufficientDataVerdict;
   const scores = Object.values(windows).map(calculateRiskScore);
   const maxScore = Math.max(...scores);
   const highRiskWindows = scores.filter((s) => s > 60).length;

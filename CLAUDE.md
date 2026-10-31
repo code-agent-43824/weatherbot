@@ -76,9 +76,25 @@ rain-consensus fields (`rainySourceCount`, `rainMajority`, `severeVotes`, `confl
 `buildForecastDetails` (`src/forecast-details.js`) appends the per-source block **after** that
 polish → the whole `windows` object and the final text are appended to `store.forecastLogs`.
 
-The order there is load-bearing: the per-source block is made of numbers, units and provider
-names, which is exactly what the LLM validator rejects — send it through `polishForecastWithLlm`
-and the model's reply would be discarded every time sources disagree.
+The per-source block is appended after editing. The editor must copy the scenario, route,
+date, all weather-window lines and verdict byte-for-byte; only the fixed `🌦️` heading has
+a small allowlisted cosmetic variant. Any other change falls back to the original draft.
+
+Missing rain data in any window produces an explicit insufficient-data verdict, never a
+favorable ride recommendation. Temperature-only sources are not dry rain votes.
+MET Norway and Tomorrow.io timestamps are converted into the scenario timezone, including
+date rollover, before selecting windows.
+
+All JSON requests go through `src/http.js`: bounded fetch plus JSON-body reading, errors
+without URLs, headers, response bodies or original error causes. Weather keeps its existing
+retry/4xx policy. Telegram sends and OpenRouter use 15s; geocoding uses 10s; polling allows
+its long-poll timeout plus 10s. Never reintroduce credential-bearing URLs into logs.
+
+`src/task-tracker.js` closes task admission and drains current work on SIGTERM/SIGINT.
+Shutdown clears the scheduler, aborts an idle long poll, finishes any current message/send
+and its state commit, then performs the final serialized save. systemd must allow at least
+180 seconds (`TimeoutStopSec=180`). This reduces restart duplicates; it does not provide
+exactly-once delivery across crashes or ambiguous Telegram network failures.
 
 Not every field the aggregate computes reaches the message; the aggregate is also the log
 record. Check `formatWindow`, `templateForecast` and `buildForecastDetails` for what a user
@@ -124,12 +140,10 @@ Provider evaluation notes — free-plan limits, what was rejected and why — li
 
 Deliberate, with reasons; not to be reopened on an agent's initiative (§8).
 
-- **Weather facts and safety verdicts are deterministic; the LLM only polishes wording.**
-  `polishForecastWithLlm` sends the finished draft and rejects the reply if it mentions numbers,
-  units or provider names, or if it drops `"По нескольким источникам"`, `"Итог:"` or the leading
-  emoji — the deterministic draft is sent instead. Reason: a model must never be the source of a
-  probability or a ride/don't-ride recommendation. Any change to `templateForecast` keeps that
-  validator in sync.
+- **Weather facts and safety verdicts are deterministic and immutable to the LLM.**
+  The validator requires exact scenario, route, date, weather-window and verdict lines.
+  Only the fixed heading has an allowlisted cosmetic variant; otherwise send the draft.
+  Reason: semantic similarity checks cannot reliably detect a reversed safety verdict.
 - **The regular commute is asymmetric and must stay that way.** Morning and evening are the
   windows the rider is out on the bike; during the day the bike is parked at the office. So rain
   in the day window never produces a "don't ride" verdict — it produces "keep it under a roof" —
@@ -174,7 +188,14 @@ version means deciding whether those two strings move with it.
 ## Deployment
 
 **Deployment needs manual work on the server, so only Watson deploys** (§6). Every other agent
-stays out of production — no server access, no restarts, no deploy jobs.
+stays out of production unless the owner explicitly delegates deployment. On 2026-10-31
+Кирилл explicitly asked OpenClaw to fix, commit and deploy this repair stage.
+
+On the current OpenClaw host the configured SSH alias is `oracle-admin` (not the historical
+`oracle-server` below); use the configured identity, never guess credentials. Before switching,
+run the full check in the staged release, preserve the old tree and JSON, and arrange rollback.
+The 2026-10-31 repair uses a dedicated `weatherbot.service.d/20-graceful-stop.conf` with
+`[Service]` / `TimeoutStopSec=180`; preserve unrelated overrides.
 
 A push to `main` is therefore not a release: the trunk running ahead of the server is the normal
 state, and nothing reaches users until someone deploys by hand. The service runs on the Oracle

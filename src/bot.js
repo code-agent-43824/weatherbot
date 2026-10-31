@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { createTaskTracker } from './task-tracker.js';
 import { createNonOverlappingRunner } from './non-overlapping-runner.js';
 import { buildForecastDetails } from './forecast-details.js';
 import { callTelegram, sendMessage, registerBotCommands } from './telegram.js';
@@ -201,6 +202,7 @@ async function cleanupExpiredScenarios(user, notify = false) {
 
   if (notify) {
     for (const scenario of expired) {
+      if (shuttingDown) break;
       try {
         await sendMessage(
           user.tgId,
@@ -357,6 +359,7 @@ async function handleCommand(chatId, user, text) {
     }
     if (scenarios.length > 1) await sendMessage(chatId, `Сейчас пришлю ${scenarios.length} прогноз(а) по активным сценариям.`);
     for (const scenario of scenarios) {
+      if (shuttingDown) break;
       const date = scenario.mode === 'planned' ? scenario.settings.tripDate : null;
       await sendMessage(chatId, await buildForecast(user, scenario, date));
     }
@@ -484,14 +487,24 @@ async function handleMessage(update) {
   await sendMessage(chatId, 'Выберите режим: Регулярный или Поездка. Для справки: Помощь.');
 }
 
+let pollController = null;
+const tasks = createTaskTracker();
+
 async function pollOnce() {
-  const updates = await callTelegram('getUpdates', {
-    offset,
-    timeout: pollTimeoutSeconds,
-    allowed_updates: ['message'],
-  });
+  pollController = new AbortController();
+  let updates;
+  try {
+    updates = await callTelegram('getUpdates', {
+      offset,
+      timeout: pollTimeoutSeconds,
+      allowed_updates: ['message'],
+    }, { signal: pollController.signal });
+  } finally {
+    pollController = null;
+  }
 
   for (const update of updates) {
+    if (shuttingDown) break;
     offset = update.update_id + 1;
     try {
       await handleMessage(update);
@@ -505,6 +518,7 @@ async function pollOnce() {
 
 async function sendScheduledForecasts() {
   for (const user of Object.values(store.users)) {
+    if (shuttingDown) return;
     migrateUserState(user);
     try {
       await cleanupExpiredScenarios(user, true);
@@ -512,6 +526,7 @@ async function sendScheduledForecasts() {
       console.error('expired cleanup failed:', user.tgId, error);
     }
     for (const scenario of activeScenarios(user)) {
+      if (shuttingDown) return;
       const timezone = scenario.settings?.timezone || 'UTC';
       const now = new Date();
       const today = isoDateInTimezone(now, timezone);
@@ -539,6 +554,7 @@ const runScheduledForecasts = createNonOverlappingRunner(sendScheduledForecasts)
 
 async function cleanupAllExpiredScenarios() {
   for (const user of Object.values(store.users)) {
+    if (shuttingDown) return;
     migrateUserState(user);
     try {
       await cleanupExpiredScenarios(user, true);
@@ -555,11 +571,15 @@ async function main() {
   await loadStore();
   console.log('WeatherBot started');
 
+  let schedulerInterval;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`${signal} received, saving store…`);
+    console.log(`${signal} received, draining work…`);
+    clearInterval(schedulerInterval);
+    pollController?.abort();
     try {
+      await tasks.close();
       await saveStore();
     } catch (error) {
       console.error('saveStore on shutdown failed:', error);
@@ -571,17 +591,19 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
 
   try {
-    await registerBotCommands();
+    await tasks.run(registerBotCommands);
   } catch (error) {
     console.error('command registration failed:', error);
   }
-  await cleanupAllExpiredScenarios();
-  setInterval(() => runScheduledForecasts().catch((error) => console.error(error)), 30_000);
+  await tasks.run(cleanupAllExpiredScenarios);
+  if (shuttingDown) return;
+  schedulerInterval = setInterval(() => tasks.run(runScheduledForecasts).catch((error) => console.error(error)), 30_000);
   while (true) {
     if (shuttingDown) break;
     try {
-      await pollOnce();
+      await tasks.run(pollOnce);
     } catch (error) {
+      if (shuttingDown) break;
       console.error(error);
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }

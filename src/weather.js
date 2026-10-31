@@ -1,3 +1,4 @@
+import { fetchJsonWithTimeout } from './http.js';
 import { isoDateInTimezone, hhmmInTimezone } from './datetime.js';
 import { userAgent } from './config.js';
 import { createTtlLruCache } from './ttl-lru-cache.js';
@@ -19,24 +20,15 @@ async function fetchJson(url, options = {}) {
   const timeoutMs = 10_000;
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, {
+      return await fetchJsonWithTimeout(url, {
         ...options,
-        signal: controller.signal,
         headers: {
           'user-agent': userAgent,
           accept: 'application/json',
           ...(options.headers || {}),
         },
-      });
-      if (!response.ok) {
-        const error = new Error(`${url} returned ${response.status}`);
-        error.status = response.status;
-        throw error;
-      }
-      return await response.json();
+      }, timeoutMs);
     } catch (error) {
       lastError = error;
       // Повтор лечит обрыв и 5xx, но не 4xx: ключ от повтора не станет валидным,
@@ -45,8 +37,6 @@ async function fetchJson(url, options = {}) {
       if (attempt < maxRetries) {
         await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
       }
-    } finally {
-      clearTimeout(timer);
     }
   }
   throw lastError;
@@ -180,9 +170,9 @@ export async function collectWeather(points) {
 
 function summarizeValues(values) {
   if (!values.length) return null;
-  const temps = values.map((v) => Number(v.temp)).filter(Number.isFinite);
-  const probs = values.map((v) => Number(v.rainProb)).filter(Number.isFinite);
-  const rain = values.map((v) => Number(v.rainMm)).filter(Number.isFinite);
+  const temps = values.map((v) => v.temp == null ? NaN : Number(v.temp)).filter(Number.isFinite);
+  const probs = values.map((v) => v.rainProb == null ? NaN : Number(v.rainProb)).filter(Number.isFinite);
+  const rain = values.map((v) => v.rainMm == null ? NaN : Number(v.rainMm)).filter(Number.isFinite);
   return {
     tempMin: temps.length ? Math.round(Math.min(...temps)) : null,
     tempMax: temps.length ? Math.round(Math.max(...temps)) : null,
@@ -209,11 +199,12 @@ export function openMeteoWindow(result, date, hours) {
   return summarizeValues(values);
 }
 
-export function metNorwayWindow(result, date, hours) {
+export function metNorwayWindow(result, date, hours, timezone = 'UTC') {
   const values = [];
   for (const row of result.data.properties?.timeseries || []) {
-    if (!row.time.startsWith(date)) continue;
-    const hour = Number(row.time.slice(11, 13));
+    const time = new Date(row.time);
+    if (isoDateInTimezone(time, timezone) !== date) continue;
+    const hour = Number(hhmmInTimezone(time, timezone).slice(0, 2));
     if (!hours.includes(hour)) continue;
     const instant = row.data?.instant?.details || {};
     const nextHour = row.data?.next_1_hours || row.data?.next_6_hours || {};
@@ -286,13 +277,13 @@ export function weatherApiWindow(result, date, hours) {
   return summarizeValues(values);
 }
 
-export function tomorrowWindow(result, date, hours) {
+export function tomorrowWindow(result, date, hours, timezone = 'UTC') {
   const values = [];
   const hourly = result.data.timelines?.hourly || [];
   for (const row of hourly) {
-    const time = String(row.time || '');
-    const hour = Number(time.slice(11, 13));
-    if (!time.startsWith(date) || !hours.includes(hour)) continue;
+    const time = new Date(row.time);
+    const hour = Number(hhmmInTimezone(time, timezone).slice(0, 2));
+    if (isoDateInTimezone(time, timezone) !== date || !hours.includes(hour)) continue;
     const data = row.values || {};
     const rainMm = Math.max(
       Number(data.rainIntensity || 0),

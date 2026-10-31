@@ -29,10 +29,10 @@ test('accepts the draft it validates against on a mixed day', () => {
   assert.equal(validatePolished(mixedDraft, mixedDraft), true);
 });
 
-test('accepts a polish that keeps every window as it was', () => {
+test('rejects even a stylistic change to the protected verdict', () => {
   const polished = mixedDraft.replace('Итог: на мото', 'Итог: сегодня на мото');
 
-  assert.equal(validatePolished(polished, mixedDraft), true);
+  assert.equal(validatePolished(polished, mixedDraft), false);
 });
 
 test('rejects a polish that turns a dry window into a rainy one', () => {
@@ -44,13 +44,13 @@ test('rejects a polish that turns a dry window into a rainy one', () => {
   assert.equal(validatePolished(polished, mixedDraft), false);
 });
 
-test('keeps a dry window that the model rephrased without rain', () => {
+test('rejects paraphrasing protected weather facts', () => {
   const polished = mixedDraft
     .split('\n')
     .map((line) => (line.startsWith('🌅') ? '🌅 утро: +12…+18°C, без осадков' : line))
     .join('\n');
 
-  assert.equal(validatePolished(polished, mixedDraft), true);
+  assert.equal(validatePolished(polished, mixedDraft), false);
 });
 
 test('rejects a polish that drops a window line', () => {
